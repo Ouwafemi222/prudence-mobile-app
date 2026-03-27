@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "prudence-path-mobile-app-src",
-    "slug": "prudence-path-mobile-app-src",
+    "name": "prudence-path-mobile-app",
+    "slug": "prudence-path-mobile-app",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
