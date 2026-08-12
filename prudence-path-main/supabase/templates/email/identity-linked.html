@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Identity linked — THE PRUDENCE</title>
+</head>
+<body style="margin:0;padding:0;background-color:#F5F5F5;font-family:'Lato',Helvetica,Arial,sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:linear-gradient(180deg,#F5F3FF 0%,#F5F5F5 40%,#F5F5F5 100%);">
+    <tr>
+      <td align="center" style="padding:40px 16px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;background-color:#FAFAFA;border-radius:20px;border:1px solid #D4D4D4;box-shadow:0 8px 32px rgba(0,0,0,0.08);overflow:hidden;">
+          <tr>
+            <td align="center" style="padding:36px 32px 28px;background:linear-gradient(135deg,#5B52EB 0%,#A855F7 100%);">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td align="center" style="width:56px;height:56px;background:rgba(255,255,255,0.2);border-radius:16px;font-size:28px;font-weight:700;color:#EEF2FF;line-height:56px;">P</td></tr></table>
+              <h1 style="margin:16px 0 6px;font-size:22px;font-weight:700;color:#FFFFFF;letter-spacing:0.04em;">THE PRUDENCE</h1>
+              <p style="margin:0;font-size:12px;color:rgba(255,255,255,0.88);">Security notification</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:36px 32px;">
+              <h2 style="margin:0 0 12px;font-size:24px;font-weight:700;color:#171717;font-family:'EB Garamond',Georgia,serif;">New sign-in method linked</h2>
+              <p style="margin:0 0 20px;font-size:15px;line-height:1.6;color:#404040;">A new identity provider was linked to your THE PRUDENCE account:</p>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 24px;background:#F5F3FF;border-radius:12px;border:1px solid #E0DBFF;">
+                <tr><td style="padding:16px 20px;text-align:center;">
+                  <p style="margin:0 0 8px;font-size:13px;color:#737373;">Provider</p>
+                  <p style="margin:0 0 16px;font-size:18px;font-weight:700;color:#5B52EB;text-transform:capitalize;">{{ .Provider }}</p>
+                  <p style="margin:0;font-size:14px;color:#404040;">Account: <strong>{{ .Email }}</strong></p>
+                </td></tr>
+              </table>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#FEF2F2;border-radius:12px;border:1px solid #FECACA;">
+                <tr><td style="padding:16px 20px;">
+                  <p style="margin:0;font-size:14px;line-height:1.5;color:#991B1B;"><strong>Didn't link this provider?</strong> Unlink it from your account settings and contact support.</p>
+                </td></tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:20px 32px 28px;border-top:1px solid #E5E5E5;text-align:center;">
+              <p style="margin:0 0 4px;font-size:12px;color:#737373;">&copy; THE PRUDENCE</p>
+              <p style="margin:0;font-size:11px;color:#A3A3A3;"><a href="{{ .SiteURL }}" style="color:#5B52EB;text-decoration:none;">{{ .SiteURL }}</a></p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

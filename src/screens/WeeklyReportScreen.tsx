@@ -1,9 +1,20 @@
 import { type ReactNode, useCallback, useMemo, useState } from "react";
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View, Platform } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View, Platform } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { useAuth } from "../contexts/AuthContext";
 import { supabase } from "../integrations/supabase/client";
-import { addDaysISODate, getNigeriaWeekStartISO, NIGERIA_TIME_ZONE } from "../lib/nigeriaTime";
+import {
+  addDaysISODate,
+  getNigeriaWeekStartISO,
+  getSundayWeekNumber,
+  listRecentWeekStarts,
+  NIGERIA_TIME_ZONE,
+} from "../lib/nigeriaTime";
+import { WEEKLY_PAGES_TARGET } from "../lib/reportTargets";
+import { notifyUser } from "../lib/notifyUser";
+import { PeriodPicker } from "../components/reports/PeriodPicker";
+import { SubmissionReviewDialog } from "../components/submissions/SubmissionReviewDialog";
+import type { ActivityRow } from "../lib/activityTypes";
 import type { ThemeTokens } from "../theme/themes";
 import { useAppTheme } from "../contexts/ThemeContext";
 import { useTabBarContentPaddingBottom } from "../hooks/useTabBarContentPaddingBottom";
@@ -66,13 +77,23 @@ function getWeekNumber(dateStr: string) {
   );
 }
 
-const WEEKLY_STAT_TARGETS = { pages: 5, gigs: 10, income: 2000, contacts: 75 };
+const WEEKLY_STAT_TARGETS = { pages: WEEKLY_PAGES_TARGET, gigs: 10, income: 2000, contacts: 75 };
 
 export function WeeklyReportScreen() {
   const { tokens } = useAppTheme();
   const styles = useMemo(() => getStyles(tokens), [tokens]);
   const tabBarClearance = useTabBarContentPaddingBottom();
   const { user, isTrainer } = useAuth();
+  const weekOptions = useMemo(
+    () =>
+      listRecentWeekStarts(16).map((value) => ({
+        value,
+        label: `W${getSundayWeekNumber(value)} · ${value}`,
+      })),
+    [],
+  );
+  const [selectedWeekStart, setSelectedWeekStart] = useState(getNigeriaWeekStartISO);
+  const [reviewDay, setReviewDay] = useState<(Partial<ActivityRow> & { activity_date: string }) | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [weeklyReport, setWeeklyReport] = useState<WeeklyReport | null>(null);
@@ -130,8 +151,9 @@ export function WeeklyReportScreen() {
 
     setLoading(true);
     try {
-      const { data, error } = await supabase.rpc("get_or_generate_weekly_report", {
+      const { data, error } = await supabase.rpc("get_or_generate_weekly_report_for_week", {
         p_user_id: user.id,
+        p_week_start_date: selectedWeekStart,
       });
 
       if (error) throw error;
@@ -164,7 +186,7 @@ export function WeeklyReportScreen() {
 
         await fetchDailySubmissions(report.week_start_date, report.week_end_date, user.id);
       } else {
-        const weekStartISO = getNigeriaWeekStartISO();
+        const weekStartISO = selectedWeekStart;
 
         const { error: genError } = await supabase.rpc("generate_weekly_report", {
           p_user_id: user.id,
@@ -199,7 +221,7 @@ export function WeeklyReportScreen() {
     } finally {
       setLoading(false);
     }
-  }, [user, isTrainer, fetchDailySubmissions]);
+  }, [user, isTrainer, fetchDailySubmissions, selectedWeekStart]);
 
   useFocusEffect(
     useCallback(() => {
@@ -246,11 +268,13 @@ export function WeeklyReportScreen() {
 
       if (error) throw error;
 
-      await supabase.from("notifications").insert({
+      await notifyUser({
         user_id: weeklyReport.user_id,
         title: "Weekly Report Feedback",
         message: `Your trainer has provided feedback on your weekly report for the week of ${formatWeekRange(weeklyReport.week_start_date, weeklyReport.week_end_date)}.`,
         type: "feedback",
+        link: "/weekly-reports",
+        sendEmail: false,
       });
 
       showToast("Trainer feedback saved");
@@ -278,6 +302,7 @@ export function WeeklyReportScreen() {
         contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarClearance }]}
         style={styles.scroll}
       >
+        <PeriodPicker options={weekOptions} value={selectedWeekStart} onChange={setSelectedWeekStart} />
         <Card style={styles.emptyCard}>
           <Text style={styles.emptyTitle}>No weekly report yet</Text>
           <Text style={styles.mutedCenter}>Submit daily activities to generate your weekly report.</Text>
@@ -324,12 +349,15 @@ export function WeeklyReportScreen() {
   const consistencyScore = Number(weeklyReport.consistency_score || 0);
 
   return (
+    <>
     <ScrollView
       style={styles.scroll}
       contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarClearance }]}
       showsVerticalScrollIndicator={false}
       keyboardShouldPersistTaps="handled"
     >
+      <PeriodPicker options={weekOptions} value={selectedWeekStart} onChange={setSelectedWeekStart} />
+
       <View style={styles.weekHeader}>
         <View style={{ flex: 1 }}>
           <Text style={styles.muted}>📅 Week of {formatWeekRange(weeklyReport.week_start_date, weeklyReport.week_end_date)}</Text>
@@ -376,7 +404,15 @@ export function WeeklyReportScreen() {
         </CardHeader>
         <CardContent style={{ gap: 10 }}>
           {dailySubmissions.map((day) => (
-            <View key={day.date} style={styles.dayRow}>
+            <Pressable
+              key={day.date}
+              style={styles.dayRow}
+              onPress={async () => {
+                if (!day.activity_id || !user) return;
+                const { data } = await supabase.from("daily_activities").select("*").eq("id", day.activity_id).maybeSingle();
+                setReviewDay((data as ActivityRow) ?? { id: day.activity_id, user_id: user.id, activity_date: day.date });
+              }}
+            >
               <View style={styles.dayRowLeft}>
                 <View
                   style={[
@@ -404,7 +440,7 @@ export function WeeklyReportScreen() {
               <Badge variant={day.submitted ? (day.verified ? "success" : "warning") : "outline"}>
                 {day.submitted ? (day.verified ? "Verified" : "Pending") : "Missed"}
               </Badge>
-            </View>
+            </Pressable>
           ))}
         </CardContent>
       </Card>
@@ -533,6 +569,12 @@ export function WeeklyReportScreen() {
         </CardContent>
       </Card>
     </ScrollView>
+    <SubmissionReviewDialog
+      visible={Boolean(reviewDay)}
+      activity={reviewDay}
+      onClose={() => setReviewDay(null)}
+    />
+    </>
   );
 }
 

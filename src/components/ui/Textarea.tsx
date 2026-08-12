@@ -1,6 +1,7 @@
-import type { StyleProp } from "react-native";
-import { TextInput, TextStyle } from "react-native";
+import type { ComponentProps } from "react";
+import { TextInput, type StyleProp, type TextStyle } from "react-native";
 import { useAppTheme } from "../../contexts/ThemeContext";
+import { useKeyboardInputFocus } from "./KeyboardSafe";
 
 type TextareaProps = {
   value: string;
@@ -9,10 +10,23 @@ type TextareaProps = {
   maxLength?: number;
   editable?: boolean;
   style?: StyleProp<TextStyle>;
-};
+} & Omit<
+  ComponentProps<typeof TextInput>,
+  "value" | "onChangeText" | "placeholder" | "maxLength" | "editable" | "style" | "multiline"
+>;
 
-export function Textarea({ value, onChangeText, placeholder, maxLength, editable = true, style }: TextareaProps) {
+export function Textarea({
+  value,
+  onChangeText,
+  placeholder,
+  maxLength,
+  editable = true,
+  style,
+  onFocus,
+  ...rest
+}: TextareaProps) {
   const { tokens } = useAppTheme();
+  const scrollIntoView = useKeyboardInputFocus();
   return (
     <TextInput
       placeholder={placeholder}
@@ -22,6 +36,13 @@ export function Textarea({ value, onChangeText, placeholder, maxLength, editable
       editable={editable}
       maxLength={maxLength}
       multiline
+      scrollEnabled
+      textAlignVertical="top"
+      underlineColorAndroid="transparent"
+      onFocus={(e) => {
+        scrollIntoView(e);
+        onFocus?.(e);
+      }}
       style={[
         {
           borderWidth: 1,
@@ -37,6 +58,7 @@ export function Textarea({ value, onChangeText, placeholder, maxLength, editable
         },
         style,
       ]}
+      {...rest}
     />
   );
 }

@@ -1,4 +1,4 @@
-export type AppThemeName = "neo" | "crimson";
+export type AppThemeName = "prudence" | "neo" | "crimson";
 
 export type ThemeTokens = {
   colors: {
@@ -33,13 +33,46 @@ export type ThemeTokens = {
   spacing: (n: number) => number;
   gradientTop: string;
   gradientBottom: string;
+  isLight: boolean;
 };
 
 const sharedRadius = {
   sm: 10,
   md: 14,
-  lg: 18,
+  lg: 20,
   xl: 24,
+};
+
+/** Website brand — default. Primary #5B52EB, accent #A855F7, background #F5F5F5. */
+export const prudenceTheme: ThemeTokens = {
+  colors: {
+    background: "#F5F5F5",
+    card: "rgba(255,255,255,0.88)",
+    cardMuted: "#F5F3FF",
+    surface: "#FFFFFF",
+    foreground: "#171717",
+    primary: "#5B52EB",
+    primaryMuted: "#4F46E5",
+    primaryForeground: "#EEF2FF",
+    accent: "rgba(168, 85, 247, 0.10)",
+    accentStrong: "rgba(168, 85, 247, 0.18)",
+    accentForeground: "#A855F7",
+    muted: "#A3A3A3",
+    mutedForeground: "#404040",
+    destructive: "#DC2626",
+    destructiveForeground: "#FFFFFF",
+    border: "#D4D4D4",
+    borderGlow: "rgba(91, 82, 235, 0.28)",
+    success: "#16A34A",
+    warning: "#F59E0B",
+    tabBar: "#FFFFFF",
+    overlay: "rgba(23,23,23,0.35)",
+  },
+  radius: sharedRadius,
+  spacing: (n: number) => n * 4,
+  gradientTop: "#F5F5F5",
+  gradientBottom: "#F5F3FF",
+  isLight: true,
 };
 
 export const neoTheme: ThemeTokens = {
@@ -70,6 +103,7 @@ export const neoTheme: ThemeTokens = {
   spacing: (n: number) => n * 4,
   gradientTop: "#0A1F14",
   gradientBottom: "#000000",
+  isLight: false,
 };
 
 export const crimsonTheme: ThemeTokens = {
@@ -100,9 +134,11 @@ export const crimsonTheme: ThemeTokens = {
   spacing: (n: number) => n * 4,
   gradientTop: "#C2185B",
   gradientBottom: "#FFF7FA",
+  isLight: true,
 };
 
 export const appThemes: Record<AppThemeName, ThemeTokens> = {
+  prudence: prudenceTheme,
   neo: neoTheme,
   crimson: crimsonTheme,
 };

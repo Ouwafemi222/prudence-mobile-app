@@ -1,14 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, Platform, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, Platform, StyleSheet, Text, View } from "react-native";
 import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
 import { useDeferredReactNativeCalendar } from "../hooks/useDeferredReactNativeCalendar";
 import { useAuth } from "../contexts/AuthContext";
 import { supabase } from "../integrations/supabase/client";
 import { useAppTheme } from "../contexts/ThemeContext";
 import { formatISODateInNigeria, formatLongDateInNigeria } from "../lib/nigeriaTime";
+import { getTodoLockMessage, isTodoDateEditable, isTodoDateToday } from "../lib/todoRules";
 import { Button } from "../components/ui/Button";
 import { Textarea } from "../components/ui/Textarea";
 import { Card } from "../components/ui/Card";
+import { FocusAwareTextInput, KeyboardSafeScroll } from "../components/ui/KeyboardSafe";
+import { PolicyNoticeBanner } from "../components/notices/PolicyNoticeBanner";
+import { TodoUpdateHistory } from "../components/todos/TodoUpdateHistory";
+import type { TodoLogEntry } from "../lib/fetchTodoSubmissionData";
 import { showAndroidToast } from "../lib/androidToast";
 
 type DailyTodoRow = {
@@ -23,7 +28,7 @@ export function DailyTodoScreen() {
   const { tokens } = useAppTheme();
   const styles = getStyles(tokens);
   const tabBarHeight = useBottomTabBarHeight();
-  const { user } = useAuth();
+  const { user, officeId } = useAuth();
   const Calendar = useDeferredReactNativeCalendar();
 
   const today = useMemo(() => formatISODateInNigeria(), []);
@@ -34,6 +39,12 @@ export function DailyTodoScreen() {
 
   const [todo, setTodo] = useState<DailyTodoRow | null>(null);
   const [plan, setPlan] = useState("");
+  const [logs, setLogs] = useState<TodoLogEntry[]>([]);
+  const [logsLoading, setLogsLoading] = useState(false);
+
+  const canEdit = isTodoDateEditable(selectedDate);
+  const lockMessage = getTodoLockMessage(selectedDate);
+  const isToday = isTodoDateToday(selectedDate);
 
   const showToast = (message: string) => {
     if (Platform.OS === "android") showAndroidToast(message);
@@ -66,11 +77,21 @@ export function DailyTodoScreen() {
           setTodo(null);
           setPlan("");
         }
-      } catch (e: any) {
-        // keep UI responsive; show error inline
+
+        setLogsLoading(true);
+        const { data: logRows } = await supabase
+          .from("daily_todo_logs")
+          .select("id, plan, created_at")
+          .eq("user_id", user.id)
+          .eq("todo_date", selectedDate)
+          .order("created_at", { ascending: false });
+        setLogs((logRows || []) as TodoLogEntry[]);
+      } catch {
         setTodo(null);
         setPlan("");
+        setLogs([]);
       } finally {
+        setLogsLoading(false);
         setLoading(false);
       }
     };
@@ -78,17 +99,24 @@ export function DailyTodoScreen() {
     fetchTodo();
   }, [selectedDate, user?.id]);
 
-  const isToday = selectedDate === today;
-
   const save = async () => {
     if (!user) return;
+    if (!canEdit) {
+      Alert.alert("Read only", lockMessage || "This date cannot be edited.");
+      return;
+    }
+    if (!plan.trim()) {
+      Alert.alert("Morning plan", "Write your morning plan before saving.");
+      return;
+    }
     setSaving(true);
     try {
       const { error } = await supabase.from("daily_todos").upsert(
         {
           user_id: user.id,
+          office_id: officeId,
           todo_date: selectedDate,
-          plan,
+          plan: plan.trim(),
         },
         { onConflict: "user_id,todo_date" },
       );
@@ -108,23 +136,43 @@ export function DailyTodoScreen() {
   };
 
   return (
-    <ScrollView
+    <KeyboardSafeScroll
       style={styles.screen}
       contentContainerStyle={[styles.container, { paddingBottom: tabBarHeight + 56 }]}
     >
       <Card style={styles.heroCard}>
-        <Text style={styles.title}>Morning Plan</Text>
-        <Text style={styles.subtitle}>Write your top priorities first, then submit your daily report after execution.</Text>
+        <Text style={styles.heroTitle}>Morning Plan</Text>
+        <Text style={styles.heroSubtitle}>
+          Set your morning plan for today only. Past dates are read-only. Every save is logged.
+        </Text>
       </Card>
+
+      <PolicyNoticeBanner noticeId="todo_same_day_v1" title="Todo planning update">
+        Morning plans are same-day only — set today's plan on today, before 11:59 PM WAT. Planning
+        future days in advance is no longer available.
+      </PolicyNoticeBanner>
+
+      {lockMessage ? (
+        <Card style={styles.heroCard}>
+          <Text style={styles.heroTitle}>{canEdit ? "Today’s window" : "Read only"}</Text>
+          <Text style={styles.heroSubtitle}>{lockMessage}</Text>
+        </Card>
+      ) : null}
 
       <Card style={styles.card}>
         <Text style={styles.cardTitle}>Pick a date</Text>
-        <Text style={styles.cardDescription}>{isToday ? "You’re editing today’s plan." : "You’re editing a past date plan."}</Text>
+        <Text style={styles.cardDescription}>
+          {isToday ? "You’re editing today’s plan." : "You’re viewing a read-only date."}
+        </Text>
 
         <View style={styles.calendarWrap}>
           {Calendar ? (
             <Calendar
-              onDayPress={(d: { dateString: string }) => setSelectedDate(d.dateString)}
+              maxDate={today}
+              onDayPress={(d: { dateString: string }) => {
+                if (d.dateString > today) return;
+                setSelectedDate(d.dateString);
+              }}
               markedDates={{
                 [selectedDate]: {
                   selected: true,
@@ -153,9 +201,15 @@ export function DailyTodoScreen() {
         </View>
 
         <View style={styles.dateRow}>
-          <TextInput
+          <FocusAwareTextInput
             value={selectedDate}
-            onChangeText={setSelectedDate}
+            onChangeText={(value) => {
+              if (value > today) {
+                setSelectedDate(today);
+                return;
+              }
+              setSelectedDate(value);
+            }}
             style={[styles.dateInput, { flex: 1 }]}
             placeholder="YYYY-MM-DD"
             keyboardType="numbers-and-punctuation"
@@ -176,18 +230,30 @@ export function DailyTodoScreen() {
         ) : (
           <>
             <Text style={styles.inputLabel}>Your plan</Text>
-            <Textarea value={plan} onChangeText={setPlan} placeholder="Example: Read 5 pages, create 2 gigs, do 15 outreaches..." />
+            <Textarea
+              value={plan}
+              onChangeText={setPlan}
+              placeholder="Example: Read 5 pages, create 2 gigs, do 15 outreaches..."
+              editable={canEdit}
+            />
             <View style={styles.metaRow}>
               <Text style={styles.metaText}>{todo ? `Last updated: ${new Date(todo.updated_at).toLocaleString()}` : "Not saved yet"}</Text>
               <Text style={styles.metaText}>{plan.length} chars</Text>
             </View>
 
             <View style={styles.buttonSpacer} />
-            <Button title="Save Morning Plan" onPress={save} loading={saving} disabled={saving} style={styles.primaryActionBtn} />
+            <Button
+              title={canEdit ? "Save Morning Plan" : "Read only"}
+              onPress={() => void save()}
+              loading={saving}
+              disabled={saving || !canEdit}
+              style={styles.primaryActionBtn}
+            />
+            <TodoUpdateHistory logs={logs} loading={logsLoading} />
           </>
         )}
       </Card>
-    </ScrollView>
+    </KeyboardSafeScroll>
   );
 }
 
@@ -204,18 +270,20 @@ const getStyles = (tokens: ReturnType<typeof useAppTheme>["tokens"]) =>
   },
   heroCard: {
     padding: 14,
-    backgroundColor: tokens.colors.accent,
-    borderColor: tokens.colors.border,
+    backgroundColor: tokens.colors.primary,
+    borderColor: tokens.colors.primary,
   },
-  title: {
-    fontSize: 22,
+  heroTitle: {
+    fontSize: 18,
     fontWeight: "800",
-    color: tokens.colors.foreground,
+    color: tokens.colors.primaryForeground,
     marginBottom: 4,
   },
-  subtitle: {
-    color: tokens.colors.mutedForeground,
+  heroSubtitle: {
+    color: tokens.colors.primaryForeground,
+    opacity: 0.9,
     fontSize: 13,
+    lineHeight: 18,
   },
   card: {
     padding: 14,

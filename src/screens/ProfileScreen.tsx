@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
-import { useFocusEffect } from "@react-navigation/native";
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Switch, Text, TextInput, View } from "react-native";
+import { useFocusEffect, useNavigation } from "@react-navigation/native";
+import type { BottomTabNavigationProp } from "@react-navigation/bottom-tabs";
+import type { AppTabParamList } from "../navigation/AppTabs";
 import * as ImagePicker from "expo-image-picker";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../contexts/AuthContext";
@@ -10,6 +12,7 @@ import { getLocalUriAsUploadBody } from "../lib/localFileForUpload";
 import { formatSupabaseError } from "../lib/supabaseError";
 import { useAppTheme } from "../contexts/ThemeContext";
 import { useTabBarContentPaddingBottom } from "../hooks/useTabBarContentPaddingBottom";
+import { useNigeriaTimeGreeting } from "../hooks/useNigeriaTimeGreeting";
 import {
   applySubmissionLocalReminders,
   DEFAULT_SUBMISSION_REMINDER_PREFS,
@@ -25,11 +28,13 @@ import {
   type PushNotificationPrefs,
 } from "../lib/pushNotificationPrefs";
 import { Card } from "../components/ui/Card";
+import { KeyboardSafeScroll } from "../components/ui/KeyboardSafe";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { Badge } from "../components/ui/Badge";
 import { Avatar } from "../components/ui/Avatar";
 import { PdfViewerModal } from "../components/PdfViewerModal";
+import { openSitePath } from "../lib/openSite";
 
 function resolveAvatarPublicUrl(avatarPathOrUrl: string | null | undefined): string | null {
   if (!avatarPathOrUrl?.trim()) return null;
@@ -47,6 +52,7 @@ type UserSkill = {
   is_mandatory: boolean;
   training_plan_pdf_path: string | null;
   trainers: string[] | null;
+  overview: string | null;
 };
 
 const TABS: { key: TabKey; label: string }[] = [
@@ -70,11 +76,12 @@ function skillStatusLabel(status: string): string {
 }
 
 export function ProfileScreen() {
-  const { user, profile, userRole, refreshProfile, isAdmin, isTrainer, isSponsor, isPro, signOut } = useAuth();
+  const { user, profile, userRole, office, refreshProfile, isAdmin, isTrainer, isSponsor, isPro, isOfficeAdmin, isSuperAdmin, signOut } = useAuth();
   const { themeName, setThemeName, tokens } = useAppTheme();
   const styles = getStyles(tokens);
   const isCrimson = themeName === "crimson";
   const stackNav = useMainAppNavigation();
+  const tabNav = useNavigation<BottomTabNavigationProp<AppTabParamList>>();
   const [tab, setTab] = useState<TabKey>("profile");
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -140,34 +147,40 @@ export function ProfileScreen() {
     if (!user) return;
     setSkillsLoading(true);
     try {
-      const { data, error } = await supabase
+      const { data: links, error: linkError } = await supabase
         .from("user_skills")
-        .select(
-          `
-          skill_id,
-          status,
-          skills (
-            id,
-            name,
-            is_mandatory,
-            training_plan_pdf_path,
-            trainers
-          )
-        `,
-        )
+        .select("skill_id, status")
         .eq("user_id", user.id);
+      if (linkError) throw linkError;
 
-      if (error) throw error;
+      const rows = links || [];
+      if (rows.length === 0) {
+        setUserSkills([]);
+        return;
+      }
 
-      const list: UserSkill[] = (data || []).map((row: any) => ({
-        skill_id: row.skill_id,
-        skill_name: row.skills?.name ?? "Unknown",
-        status: row.status,
-        is_mandatory: row.skills?.is_mandatory ?? false,
-        training_plan_pdf_path: row.skills?.training_plan_pdf_path ?? null,
-        trainers: row.skills?.trainers ?? null,
-      }));
-      setUserSkills(list);
+      const ids = [...new Set(rows.map((row) => row.skill_id).filter(Boolean))];
+      const { data: skills, error: skillError } = await supabase
+        .from("skills")
+        .select("id, name, is_mandatory, training_plan_pdf_path, trainers, overview")
+        .in("id", ids);
+      if (skillError) throw skillError;
+
+      const byId = new Map((skills || []).map((skill) => [skill.id, skill]));
+      setUserSkills(
+        rows.map((row) => {
+          const skill = byId.get(row.skill_id);
+          return {
+            skill_id: row.skill_id,
+            skill_name: skill?.name ?? "Unknown",
+            status: row.status,
+            is_mandatory: Boolean(skill?.is_mandatory),
+            training_plan_pdf_path: skill?.training_plan_pdf_path ?? null,
+            trainers: skill?.trainers ?? null,
+            overview: skill?.overview ?? null,
+          };
+        }),
+      );
     } catch {
       setUserSkills([]);
     } finally {
@@ -283,9 +296,11 @@ export function ProfileScreen() {
     }
   };
 
-  const showAdminTools = isAdmin || isTrainer;
-  const canViewGroupTodos = isAdmin || isTrainer || isPro;
+  const showAdminTools = isAdmin || isTrainer || isOfficeAdmin;
+  const canViewGroupTodos = isAdmin || isTrainer || isPro || isOfficeAdmin;
   const tabBarClearance = useTabBarContentPaddingBottom();
+  const firstName = (profile?.full_name || profile?.username || "there").split(" ")[0];
+  const greeting = useNigeriaTimeGreeting(firstName);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -295,13 +310,17 @@ export function ProfileScreen() {
         title={pdfViewer?.title ?? ""}
         onClose={() => setPdfViewer(null)}
       />
-      <ScrollView
+      <KeyboardSafeScroll
         style={styles.screen}
         contentContainerStyle={[styles.container, { paddingBottom: tabBarClearance }]}
-        keyboardShouldPersistTaps="handled"
       >
-        <Text style={styles.pageTitle}>Profile & Settings</Text>
-        <Text style={styles.pageSub}>Manage your account and preferences</Text>
+        <Text style={styles.pageTitle}>
+          {greeting.emoji} {greeting.headline}
+        </Text>
+        <Text style={styles.pageSub}>
+          {greeting.clock} WAT · Manage your account and preferences
+        </Text>
+        <Button title="Ask Prudence" variant="outline" onPress={() => stackNav.navigate("AssistantChat")} />
 
         <View style={styles.tabRow}>
           {TABS.map((t) => (
@@ -352,6 +371,12 @@ export function ProfileScreen() {
                 </Text>
                 <TextInput value={profile?.sponsor_username ?? ""} editable={false} style={styles.readonlyInput} />
               </View>
+              <View style={styles.readonlyRow}>
+                <Text style={styles.label}>
+                  Office <Badge variant="outline"> read-only </Badge>
+                </Text>
+                <TextInput value={office?.name ?? "—"} editable={false} style={styles.readonlyInput} />
+              </View>
             </Card>
 
             <Card style={[styles.card, isCrimson ? styles.keyCardAccent : null]}>
@@ -383,6 +408,14 @@ export function ProfileScreen() {
               <Text style={styles.cardDesc}>Choose your preferred app theme.</Text>
               <View style={styles.themeRow}>
                 <Pressable
+                  onPress={() => setThemeName("prudence")}
+                  style={[styles.themePill, themeName === "prudence" ? styles.themePillActive : null]}
+                >
+                  <Text style={[styles.themePillText, themeName === "prudence" ? styles.themePillTextActive : null]}>
+                    Prudence
+                  </Text>
+                </Pressable>
+                <Pressable
                   onPress={() => setThemeName("neo")}
                   style={[styles.themePill, themeName === "neo" ? styles.themePillActive : null]}
                 >
@@ -405,14 +438,15 @@ export function ProfileScreen() {
               <Button title="My submissions" variant="outline" onPress={() => stackNav.navigate("MySubmissions")} />
               <Button title="Notifications inbox" variant="outline" onPress={() => stackNav.navigate("NotificationsInbox")} />
               <Button title="Suggestion box" variant="outline" onPress={() => stackNav.navigate("Suggestions")} />
+              <Button title="About (website)" variant="outline" onPress={() => void openSitePath("/about")} />
+              <Button title="FAQ (website)" variant="outline" onPress={() => void openSitePath("/faq")} />
+              <Button title="Apply (website)" variant="outline" onPress={() => void openSitePath("/apply")} />
               {canViewGroupTodos ? (
                 <Button title="Group todo list" variant="outline" onPress={() => stackNav.navigate("GroupTodosReports")} />
               ) : null}
+              <Button title="Sponsor dashboard" variant="outline" onPress={() => stackNav.navigate("SponsorDashboard")} />
               {isSponsor ? (
-                <>
-                  <Button title="Sponsor dashboard" variant="outline" onPress={() => stackNav.navigate("SponsorDashboard")} />
-                  <Button title="My team list" variant="outline" onPress={() => stackNav.navigate("Teams")} />
-                </>
+                <Button title="My team list" variant="outline" onPress={() => stackNav.navigate("Teams")} />
               ) : null}
             </Card>
 
@@ -421,9 +455,15 @@ export function ProfileScreen() {
                 <Text style={styles.cardTitle}>Trainer / admin</Text>
                 <Text style={styles.cardDesc}>Review work, groups, and skills (mobile views; complex edits on web).</Text>
                 <Button title="Admin hub" onPress={() => stackNav.navigate("AdminHub")} />
+                <Button title="Admin dashboard" variant="outline" onPress={() => stackNav.navigate("AdminDashboard")} />
                 <Button title="Submissions review" variant="outline" onPress={() => stackNav.navigate("SubmissionsReview")} />
-                <Button title="Teams directory" variant="outline" onPress={() => stackNav.navigate("Teams")} />
+                <Button title="Teams" variant="outline" onPress={() => stackNav.navigate("Teams")} />
+                <Button title="Team members" variant="outline" onPress={() => stackNav.navigate("TeamMembers")} />
                 <Button title="Group todos & reports" variant="outline" onPress={() => stackNav.navigate("GroupTodosReports")} />
+                <Button title="Trainer group weekly" variant="outline" onPress={() => stackNav.navigate("TrainerGroupWeekly")} />
+                {(isOfficeAdmin || isSuperAdmin) ? (
+                  <Button title="Office admin" variant="outline" onPress={() => stackNav.navigate("OfficeAdmin")} />
+                ) : null}
               </Card>
             )}
 
@@ -433,31 +473,43 @@ export function ProfileScreen() {
 
         {tab === "skills" && (
           <Card style={styles.card}>
-            <Text style={styles.cardTitle}>My skills</Text>
-            <Text style={styles.cardDesc}>Assigned skills and training progress</Text>
+            <Text style={styles.cardTitle}>My Skills</Text>
+            <Text style={styles.cardDesc}>View your assigned skills and training progress</Text>
             {skillsLoading ? (
               <ActivityIndicator color={tokens.colors.primary} style={{ marginVertical: 24 }} />
             ) : userSkills.length === 0 ? (
-              <Text style={styles.emptyText}>No skills assigned yet.</Text>
+              <View style={styles.skillEmpty}>
+                <Text style={styles.emptyText}>No skills assigned yet.</Text>
+                <Text style={styles.cardDesc}>
+                  Skills will appear here once they are assigned. Browse Skills Hub to add or review training skills.
+                </Text>
+                <Button
+                  title="Add your skills"
+                  onPress={() => tabNav.navigate("Resources", { section: "skills" })}
+                />
+              </View>
             ) : (
               <>
                 {userSkills.filter((s) => s.is_mandatory).length > 0 && (
                   <View style={styles.skillBlock}>
                     <View style={styles.skillBlockHead}>
                       <Badge>Mandatory</Badge>
-                      <Text style={styles.skillBlockTitle}>Mandatory skills</Text>
+                      <Text style={styles.skillBlockTitle}>Mandatory Skills</Text>
                     </View>
                     {userSkills
                       .filter((s) => s.is_mandatory)
                       .map((skill) => (
                         <View key={skill.skill_id} style={styles.skillItem}>
-                          <Text style={styles.skillName}>{skill.skill_name}</Text>
-                          <Badge variant="outline">{skillStatusLabel(skill.status)}</Badge>
+                          <View style={styles.skillItemHead}>
+                            <Text style={styles.skillName}>{skill.skill_name}</Text>
+                            <Badge variant="outline">{skillStatusLabel(skill.status)}</Badge>
+                          </View>
+                          {skill.overview ? <Text style={styles.trainers}>{skill.overview}</Text> : null}
                           {skill.trainers && skill.trainers.length > 0 ? (
                             <Text style={styles.trainers}>Trainers: {skill.trainers.join(", ")}</Text>
                           ) : null}
                           {skill.training_plan_pdf_path ? (
-                            <Button title="View training PDF" variant="outline" size="sm" onPress={() => openPdf(skill.skill_name, skill.training_plan_pdf_path!)} />
+                            <Button title="View PDF" variant="outline" size="sm" onPress={() => openPdf(skill.skill_name, skill.training_plan_pdf_path!)} />
                           ) : null}
                         </View>
                       ))}
@@ -467,19 +519,22 @@ export function ProfileScreen() {
                   <View style={styles.skillBlock}>
                     <View style={styles.skillBlockHead}>
                       <Badge variant="outline">Optional</Badge>
-                      <Text style={styles.skillBlockTitle}>Optional skills</Text>
+                      <Text style={styles.skillBlockTitle}>Optional Skills</Text>
                     </View>
                     {userSkills
                       .filter((s) => !s.is_mandatory)
                       .map((skill) => (
                         <View key={skill.skill_id} style={styles.skillItem}>
-                          <Text style={styles.skillName}>{skill.skill_name}</Text>
-                          <Badge variant="outline">{skillStatusLabel(skill.status)}</Badge>
+                          <View style={styles.skillItemHead}>
+                            <Text style={styles.skillName}>{skill.skill_name}</Text>
+                            <Badge variant="outline">{skillStatusLabel(skill.status)}</Badge>
+                          </View>
+                          {skill.overview ? <Text style={styles.trainers}>{skill.overview}</Text> : null}
                           {skill.trainers && skill.trainers.length > 0 ? (
                             <Text style={styles.trainers}>Trainers: {skill.trainers.join(", ")}</Text>
                           ) : null}
                           {skill.training_plan_pdf_path ? (
-                            <Button title="View training PDF" variant="outline" size="sm" onPress={() => openPdf(skill.skill_name, skill.training_plan_pdf_path!)} />
+                            <Button title="View PDF" variant="outline" size="sm" onPress={() => openPdf(skill.skill_name, skill.training_plan_pdf_path!)} />
                           ) : null}
                         </View>
                       ))}
@@ -491,133 +546,135 @@ export function ProfileScreen() {
         )}
 
         {tab === "notifications" && (
-          <Card style={styles.card}>
-            <Text style={styles.cardTitle}>In-app inbox</Text>
-            <Text style={styles.cardDesc}>Messages saved in Supabase (trainer feedback, reminders, etc.).</Text>
-            <Button title="Open notifications inbox" onPress={() => stackNav.navigate("NotificationsInbox")} />
-            <Text style={[styles.cardTitle, { marginTop: 18 }]}>Deadline reminders (free, on this phone)</Text>
-            <Text style={styles.cardDesc}>
-              Local notifications — no paid service. They fire at the times below using your phone’s clock. For Nigeria
-              rules (9:00 AM morning plan, 11:59 PM daily report WAT), set your device timezone to Lagos (GMT+1).
-            </Text>
-            <View style={styles.switchRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.switchTitle}>Enable deadline reminders</Text>
-                <Text style={styles.switchSub}>Morning plan & daily report nudges on this device</Text>
+          <>
+            <Card style={styles.card}>
+              <Text style={styles.cardTitle}>Inbox</Text>
+              <Text style={styles.cardDesc}>Trainer feedback, reminders, and team messages.</Text>
+              <Button title="Open alerts inbox" onPress={() => stackNav.navigate("NotificationsInbox")} />
+            </Card>
+
+            <Card style={styles.card}>
+              <Text style={styles.cardTitle}>Deadline reminders</Text>
+              <Text style={styles.cardDesc}>On this phone · use Lagos time for 9:00 AM / 11:59 PM WAT.</Text>
+              <View style={styles.switchRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.switchTitle}>Enable reminders</Text>
+                  <Text style={styles.switchSub}>Morning plan and night report</Text>
+                </View>
+                <Switch
+                  value={reminderPrefs.enabled}
+                  onValueChange={(v) => updateReminderPrefs({ ...reminderPrefs, enabled: v })}
+                  trackColor={{ false: tokens.colors.border, true: tokens.colors.primary }}
+                />
               </View>
-              <Switch
-                value={reminderPrefs.enabled}
-                onValueChange={(v) => updateReminderPrefs({ ...reminderPrefs, enabled: v })}
-                trackColor={{ false: tokens.colors.border, true: tokens.colors.primary }}
-              />
-            </View>
-            {reminderPrefs.enabled ? (
-              <>
-                <View style={styles.switchRow}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.switchTitle}>Morning plan</Text>
-                    <Text style={styles.switchSub}>Before 9:00 AM WAT</Text>
+              {reminderPrefs.enabled ? (
+                <>
+                  <View style={styles.switchRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.switchTitle}>Morning plan</Text>
+                      <Text style={styles.switchSub}>Before 9:00 AM WAT</Text>
+                    </View>
+                    <Switch
+                      value={reminderPrefs.morningPlan}
+                      onValueChange={(v) => updateReminderPrefs({ ...reminderPrefs, morningPlan: v })}
+                      trackColor={{ false: tokens.colors.border, true: tokens.colors.primary }}
+                    />
                   </View>
-                  <Switch
-                    value={reminderPrefs.morningPlan}
-                    onValueChange={(v) => updateReminderPrefs({ ...reminderPrefs, morningPlan: v })}
-                    trackColor={{ false: tokens.colors.border, true: tokens.colors.primary }}
-                  />
-                </View>
-                <View style={styles.switchRow}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.switchTitle}>Daily report</Text>
-                    <Text style={styles.switchSub}>Before 11:59 PM WAT</Text>
+                  <View style={styles.switchRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.switchTitle}>Daily report</Text>
+                      <Text style={styles.switchSub}>Before 11:59 PM WAT</Text>
+                    </View>
+                    <Switch
+                      value={reminderPrefs.dailyReport}
+                      onValueChange={(v) => updateReminderPrefs({ ...reminderPrefs, dailyReport: v })}
+                      trackColor={{ false: tokens.colors.border, true: tokens.colors.primary }}
+                    />
                   </View>
-                  <Switch
-                    value={reminderPrefs.dailyReport}
-                    onValueChange={(v) => updateReminderPrefs({ ...reminderPrefs, dailyReport: v })}
-                    trackColor={{ false: tokens.colors.border, true: tokens.colors.primary }}
-                  />
-                </View>
-                <Text style={styles.switchTitle}>Remind me this long before the deadline</Text>
-                <View style={styles.reminderPillRow}>
-                  {([15, 30, 60] as const).map((m: MinutesBeforeOption) => (
-                    <Pressable
-                      key={m}
-                      onPress={() => updateReminderPrefs({ ...reminderPrefs, minutesBeforeDeadline: m })}
-                      style={[
-                        styles.reminderPill,
-                        reminderPrefs.minutesBeforeDeadline === m && styles.reminderPillActive,
-                      ]}
-                      accessibilityRole="button"
-                      accessibilityState={{ selected: reminderPrefs.minutesBeforeDeadline === m }}
-                    >
-                      <Text
+                  <Text style={styles.label}>Remind me before</Text>
+                  <View style={styles.reminderPillRow}>
+                    {([15, 30, 60] as const).map((m: MinutesBeforeOption) => (
+                      <Pressable
+                        key={m}
+                        onPress={() => updateReminderPrefs({ ...reminderPrefs, minutesBeforeDeadline: m })}
                         style={[
-                          styles.reminderPillText,
-                          reminderPrefs.minutesBeforeDeadline === m && styles.reminderPillTextActive,
+                          styles.reminderPill,
+                          reminderPrefs.minutesBeforeDeadline === m && styles.reminderPillActive,
                         ]}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: reminderPrefs.minutesBeforeDeadline === m }}
                       >
-                        {m} min
-                      </Text>
-                    </Pressable>
-                  ))}
+                        <Text
+                          style={[
+                            styles.reminderPillText,
+                            reminderPrefs.minutesBeforeDeadline === m && styles.reminderPillTextActive,
+                          ]}
+                        >
+                          {m} min
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                </>
+              ) : null}
+            </Card>
+
+            <Card style={styles.card}>
+              <Text style={styles.cardTitle}>Push alerts</Text>
+              <Text style={styles.cardDesc}>Saved to your profile for inbox and team events.</Text>
+              <View style={styles.switchRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.switchTitle}>Verifications</Text>
+                  <Text style={styles.switchSub}>Trainer feedback</Text>
                 </View>
-              </>
-            ) : null}
-            <Text style={[styles.cardTitle, { marginTop: 18 }]}>Remote push (Expo)</Text>
-            <Text style={styles.cardDesc}>
-              Saved to your profile in Supabase. When the backend sends a push for inbox / team events, these toggles
-              are respected.
-            </Text>
-            <View style={styles.switchRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.switchTitle}>Verification alerts</Text>
-                <Text style={styles.switchSub}>Trainer feedback and verification-style inbox messages</Text>
+                <Switch
+                  value={notifications.verificationAlerts}
+                  onValueChange={(v) => {
+                    setNotifications((p) => {
+                      const next = { ...p, verificationAlerts: v };
+                      void persistServerPushPrefs(next);
+                      return next;
+                    });
+                  }}
+                  trackColor={{ false: tokens.colors.border, true: tokens.colors.primary }}
+                />
               </View>
-              <Switch
-                value={notifications.verificationAlerts}
-                onValueChange={(v) => {
-                  setNotifications((p) => {
-                    const next = { ...p, verificationAlerts: v };
-                    void persistServerPushPrefs(next);
-                    return next;
-                  });
-                }}
-                trackColor={{ false: tokens.colors.border, true: tokens.colors.primary }}
-              />
-            </View>
-            <View style={styles.switchRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.switchTitle}>Weekly summary</Text>
-                <Text style={styles.switchSub}>Summary-style notifications (type: summary)</Text>
+              <View style={styles.switchRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.switchTitle}>Weekly summary</Text>
+                  <Text style={styles.switchSub}>Week recap messages</Text>
+                </View>
+                <Switch
+                  value={notifications.weeklySummary}
+                  onValueChange={(v) => {
+                    setNotifications((p) => {
+                      const next = { ...p, weeklySummary: v };
+                      void persistServerPushPrefs(next);
+                      return next;
+                    });
+                  }}
+                  trackColor={{ false: tokens.colors.border, true: tokens.colors.primary }}
+                />
               </View>
-              <Switch
-                value={notifications.weeklySummary}
-                onValueChange={(v) => {
-                  setNotifications((p) => {
-                    const next = { ...p, weeklySummary: v };
-                    void persistServerPushPrefs(next);
-                    return next;
-                  });
-                }}
-                trackColor={{ false: tokens.colors.border, true: tokens.colors.primary }}
-              />
-            </View>
-            <View style={styles.switchRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.switchTitle}>Team updates</Text>
-                <Text style={styles.switchSub}>Account approval, rejection, and team alerts</Text>
+              <View style={styles.switchRow}>
+                <View style={{ flex: 1, paddingBottom: 2 }}>
+                  <Text style={styles.switchTitle}>Team updates</Text>
+                  <Text style={styles.switchSub}>Approvals and team alerts</Text>
+                </View>
+                <Switch
+                  value={notifications.teamUpdates}
+                  onValueChange={(v) => {
+                    setNotifications((p) => {
+                      const next = { ...p, teamUpdates: v };
+                      void persistServerPushPrefs(next);
+                      return next;
+                    });
+                  }}
+                  trackColor={{ false: tokens.colors.border, true: tokens.colors.primary }}
+                />
               </View>
-              <Switch
-                value={notifications.teamUpdates}
-                onValueChange={(v) => {
-                  setNotifications((p) => {
-                    const next = { ...p, teamUpdates: v };
-                    void persistServerPushPrefs(next);
-                    return next;
-                  });
-                }}
-                trackColor={{ false: tokens.colors.border, true: tokens.colors.primary }}
-              />
-            </View>
-          </Card>
+            </Card>
+          </>
         )}
 
         {tab === "security" && (
@@ -633,7 +690,7 @@ export function ProfileScreen() {
         )}
 
         <Button title="Sign out" variant="destructive" onPress={signOut} />
-      </ScrollView>
+      </KeyboardSafeScroll>
     </SafeAreaView>
   );
 }
@@ -724,10 +781,12 @@ const getStyles = (tokens: ReturnType<typeof useAppTheme>["tokens"]) =>
   },
   accountTileMuted: { fontSize: 12, color: tokens.colors.mutedForeground },
   accountTileValue: { fontSize: 14, fontWeight: "700", color: tokens.colors.foreground, textTransform: "capitalize" },
-  emptyText: { textAlign: "center", color: tokens.colors.mutedForeground, paddingVertical: 20 },
+  emptyText: { textAlign: "center", color: tokens.colors.mutedForeground, paddingVertical: 8 },
+  skillEmpty: { gap: 10, paddingVertical: 8 },
   skillBlock: { gap: 10, marginTop: 8 },
   skillBlockHead: { flexDirection: "row", alignItems: "center", gap: 8 },
   skillBlockTitle: { fontSize: 14, fontWeight: "800", color: tokens.colors.foreground },
+  skillItemHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
   skillItem: {
     padding: 12,
     borderRadius: tokens.radius.md,
@@ -736,7 +795,7 @@ const getStyles = (tokens: ReturnType<typeof useAppTheme>["tokens"]) =>
     borderColor: tokens.colors.border,
     gap: 6,
   },
-  skillName: { fontSize: 15, fontWeight: "700", color: tokens.colors.foreground },
+  skillName: { flex: 1, fontSize: 15, fontWeight: "700", color: tokens.colors.foreground },
   trainers: { fontSize: 12, color: tokens.colors.mutedForeground },
   switchRow: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: tokens.colors.border },
   switchTitle: { fontSize: 14, fontWeight: "700", color: tokens.colors.foreground },

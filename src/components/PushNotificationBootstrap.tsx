@@ -7,18 +7,18 @@ import {
   registerForExpoPushTokenAsync,
 } from "../lib/pushNotifications";
 import { upsertExpoPushTokenForCurrentUser } from "../lib/persistExpoPushToken";
+import { scheduleYearProgressReminder } from "../lib/memoryReminders";
 
 /** Registers for local/remote notification presentation and obtains an Expo push token when possible. */
 export function PushNotificationBootstrap() {
-  const { user, profile } = useAuth();
+  const { user } = useAuth();
   const sessionStarted = useRef(false);
 
   useEffect(() => {
     if (Platform.OS === "web") return;
     if (!canLoadExpoNotifications()) return;
 
-    const approved = Boolean(user && profile?.approval_status === "approved");
-    if (!approved) {
+    if (!user) {
       sessionStarted.current = false;
       return;
     }
@@ -29,8 +29,9 @@ export function PushNotificationBootstrap() {
       await configureNotificationHandler();
       const token = await registerForExpoPushTokenAsync();
       if (token) await upsertExpoPushTokenForCurrentUser(token);
+      await scheduleYearProgressReminder();
     })();
-  }, [user?.id, profile?.approval_status]);
+  }, [user?.id]);
 
   return null;
 }

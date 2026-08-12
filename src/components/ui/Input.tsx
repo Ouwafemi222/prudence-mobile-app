@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Pressable, StyleProp, StyleSheet, TextInput, TextStyle, View } from "react-native";
 import { Eye, EyeOff } from "lucide-react-native";
 import { useAppTheme } from "../../contexts/ThemeContext";
+import { useKeyboardInputFocus } from "./KeyboardSafe";
 
 type InputProps = {
   value: string;
@@ -13,7 +14,10 @@ type InputProps = {
   passwordToggle?: boolean;
   keyboardType?: ComponentProps<typeof TextInput>["keyboardType"];
   style?: StyleProp<TextStyle>;
-};
+} & Omit<
+  ComponentProps<typeof TextInput>,
+  "value" | "onChangeText" | "secureTextEntry" | "keyboardType" | "style" | "placeholder"
+>;
 
 export function Input({
   value,
@@ -23,22 +27,35 @@ export function Input({
   passwordToggle,
   keyboardType = "default",
   style,
+  onFocus,
+  returnKeyType = "done",
+  ...rest
 }: InputProps) {
   const { tokens } = useAppTheme();
   const styles = getStyles(tokens);
   const [visible, setVisible] = useState(false);
   const obscure = Boolean(secureTextEntry && (!passwordToggle || !visible));
+  const scrollIntoView = useKeyboardInputFocus();
 
   const inputEl = (
     <TextInput
       placeholder={placeholder}
       placeholderTextColor={tokens.colors.muted}
       autoCapitalize="none"
+      autoCorrect={false}
       keyboardType={keyboardType}
       secureTextEntry={obscure}
       value={value}
       onChangeText={onChangeText}
+      returnKeyType={returnKeyType}
+      blurOnSubmit
+      underlineColorAndroid="transparent"
+      onFocus={(e) => {
+        scrollIntoView(e);
+        onFocus?.(e);
+      }}
       style={[styles.input, passwordToggle && secureTextEntry ? styles.inputWithToggle : null, style]}
+      {...rest}
     />
   );
 

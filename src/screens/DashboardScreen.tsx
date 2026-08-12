@@ -14,7 +14,10 @@ import { useAuth } from "../contexts/AuthContext";
 import { useMainAppNavigation } from "../hooks/useMainAppNavigation";
 import { supabase } from "../integrations/supabase/client";
 import { useAppTheme } from "../contexts/ThemeContext";
-import { addDaysISODate, formatISODateInNigeria } from "../lib/nigeriaTime";
+import { getNigeriaWeekDayISOs, getNigeriaWeekStartISO } from "../lib/nigeriaTime";
+import { useNigeriaTimeGreeting } from "../hooks/useNigeriaTimeGreeting";
+import { WEEKLY_PAGES_TARGET } from "../lib/reportTargets";
+import { useAppBranding } from "../hooks/useAppBranding";
 import type { AppTabParamList } from "../navigation/AppTabs";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
@@ -39,7 +42,7 @@ interface RecentActivity {
 }
 
 const STAT_TARGETS = {
-  pages: 5,
+  pages: WEEKLY_PAGES_TARGET,
   gigs: 10,
   income: 2000,
   contacts: 15,
@@ -63,7 +66,8 @@ export function DashboardScreen() {
   const isCrimson = themeName === "crimson";
   const navigation = useNavigation<HomeNav>();
   const stackNav = useMainAppNavigation();
-  const { user, profile, userRole, isAdmin, isSponsor, isTrainer, isPro } = useAuth();
+  const { user, profile, userRole, office, isAdmin, isSponsor, isTrainer, isPro } = useAuth();
+  const { appName } = useAppBranding();
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<WeeklyStats>({
     pagesRead: 0,
@@ -77,7 +81,8 @@ export function DashboardScreen() {
   const [weekDayLabels, setWeekDayLabels] = useState<string[]>(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]);
   const firstLoadRef = useRef(true);
 
-  const firstName = profile?.full_name?.split(" ")[0] || "User";
+  const firstName = profile?.full_name?.split(" ")[0] || profile?.username || "there";
+  const greeting = useNigeriaTimeGreeting(firstName);
   const avatarUri = profile?.avatar_url
     ? supabase.storage.from("avatars").getPublicUrl(profile.avatar_url).data.publicUrl
     : null;
@@ -96,14 +101,14 @@ export function DashboardScreen() {
     }
     if (firstLoadRef.current) setLoading(true);
     try {
-      const todayISO = formatISODateInNigeria();
-      const from = addDaysISODate(todayISO, -6);
+      const weekStart = getNigeriaWeekStartISO();
+      const days = getNigeriaWeekDayISOs(weekStart);
 
       const { data: weekRows } = await supabase
         .from("daily_activities")
         .select("*")
         .eq("user_id", user.id)
-        .gte("activity_date", from);
+        .gte("activity_date", weekStart);
 
       if (weekRows) {
         const weekStats = weekRows.reduce(
@@ -117,7 +122,6 @@ export function DashboardScreen() {
         );
         setStats(weekStats);
 
-        const days = [-6, -5, -4, -3, -2, -1, 0].map((offset) => addDaysISODate(todayISO, offset));
         const submissions = days.map((date) => weekRows.some((d: any) => d.activity_date === date));
         setWeeklySubmissions(submissions);
         setConsistencyScore(Math.round((submissions.filter(Boolean).length / 7) * 100));
@@ -245,6 +249,12 @@ export function DashboardScreen() {
       symbol: "📂",
     },
     {
+      title: "Ask Prudence",
+      description: "Chat about plans, tags, goals, and rules",
+      onPress: () => stackNav.navigate("AssistantChat"),
+      symbol: "🤖",
+    },
+    {
       title: "Notifications",
       description: "In-app messages from your team",
       onPress: () => stackNav.navigate("NotificationsInbox"),
@@ -329,8 +339,14 @@ export function DashboardScreen() {
             <View style={styles.welcomeRow}>
               <Avatar uri={avatarUri} initials={initials} size={48} />
               <View style={{ flex: 1 }}>
-                <Text style={styles.welcomeTitle}>Welcome back, {firstName}!</Text>
-                <Text style={styles.welcomeSub}>Here’s your performance overview for this week</Text>
+                <Text style={styles.welcomeTitle}>
+                  {greeting.emoji} {greeting.headline}
+                </Text>
+                <Text style={styles.welcomeSub}>
+                  {greeting.clock} WAT
+                  {office?.name ? ` · ${office.name}` : ""}
+                  {` · ${appName}`}
+                </Text>
               </View>
             </View>
             <View style={styles.chipRow}>

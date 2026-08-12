@@ -1,7 +1,8 @@
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { BarChart3, BookOpen, Briefcase, Home, User } from "lucide-react-native";
-import { StyleSheet } from "react-native";
+import { StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { FloatingBotButton } from "../components/FloatingBotButton";
 import { DashboardScreen } from "../screens/DashboardScreen";
 import { WorkScreen } from "../screens/WorkScreen";
 import { ReportsScreen } from "../screens/ReportsScreen";
@@ -35,9 +36,13 @@ export function AppTabs() {
   const styles = getStyles(tokens);
 
   return (
+    <View style={{ flex: 1 }}>
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
+        lazy: true,
+        freezeOnBlur: true,
+        tabBarHideOnKeyboard: true,
         tabBarStyle: [
           styles.tabBar,
           {
@@ -109,6 +114,8 @@ export function AppTabs() {
         }}
       />
     </Tab.Navigator>
+    <FloatingBotButton />
+    </View>
   );
 }
 
@@ -123,9 +130,9 @@ const getStyles = (tokens: ReturnType<typeof useAppTheme>["tokens"]) =>
       marginHorizontal: 0,
       shadowColor: tokens.colors.primary,
       shadowOffset: { width: 0, height: 6 },
-      shadowOpacity: 0.12,
-      shadowRadius: 20,
-      elevation: 12,
+      shadowOpacity: 0.08,
+      shadowRadius: 12,
+      elevation: 6,
     },
     tabLabel: {
       fontSize: 10,

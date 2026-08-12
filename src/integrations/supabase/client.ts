@@ -1,5 +1,6 @@
 import "react-native-url-polyfill/auto";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import Constants from "expo-constants";
 import { createClient } from "@supabase/supabase-js";
 
 /** Metro/.env sometimes keeps wrapping quotes — breaks auth if URL/key are malformed */
@@ -12,8 +13,19 @@ function sanitizeEnv(value: string | undefined): string {
   return s;
 }
 
-const supabaseUrl = sanitizeEnv(process.env.EXPO_PUBLIC_SUPABASE_URL);
-const supabaseAnonKey = sanitizeEnv(process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY);
+const extra = (Constants.expoConfig?.extra ?? {}) as {
+  supabaseUrl?: string;
+  supabasePublishableKey?: string;
+};
+
+const supabaseUrl = sanitizeEnv(
+  process.env.EXPO_PUBLIC_SUPABASE_URL || extra.supabaseUrl,
+);
+const supabaseAnonKey = sanitizeEnv(
+  process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+    process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ||
+    extra.supabasePublishableKey,
+);
 
 if (!supabaseUrl || !supabaseAnonKey) {
   throw new Error("Missing Supabase env vars. Set EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY.");

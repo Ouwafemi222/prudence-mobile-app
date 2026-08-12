@@ -29,6 +29,8 @@ import { tokens } from "../theme/tokens";
 import { Card } from "../components/ui/Card";
 import { Button } from "../components/ui/Button";
 import { Textarea } from "../components/ui/Textarea";
+import { KeyboardSafeView } from "../components/ui/KeyboardSafe";
+import { FAST_LIST } from "../lib/listPerf";
 import { showAndroidToast } from "../lib/androidToast";
 
 type Row = {
@@ -62,17 +64,16 @@ export function SuggestionsScreen() {
   }, []);
 
   const load = useCallback(async () => {
-    if (!isSuperAdmin) {
-      setList([]);
-      return;
-    }
+    if (!user) return;
     setLoading(true);
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from("suggestions")
         .select("id, message, created_at, user_id, image_paths")
         .order("created_at", { ascending: false })
         .limit(200);
+      if (!isSuperAdmin) query = query.eq("user_id", user.id);
+      const { data, error } = await query;
       if (error) throw error;
       setList((data || []) as Row[]);
     } catch {
@@ -80,7 +81,7 @@ export function SuggestionsScreen() {
     } finally {
       setLoading(false);
     }
-  }, [isSuperAdmin]);
+  }, [isSuperAdmin, user?.id]);
 
   useFocusEffect(
     useCallback(() => {
@@ -267,23 +268,20 @@ export function SuggestionsScreen() {
     );
   }
 
-  if (!isSuperAdmin) {
-    return (
-      <FlatList
-        data={[]}
-        renderItem={() => null}
-        ListHeaderComponent={header}
-        contentContainerStyle={styles.list}
-      />
-    );
-  }
+  const removeSuggestion = async (id: string) => {
+    await supabase.from("suggestions").delete().eq("id", id);
+    setList((prev) => prev.filter((row) => row.id !== id));
+    toast("Suggestion deleted");
+  };
 
   return (
+    <KeyboardSafeView>
     <FlatList
       data={list}
       keyExtractor={(item) => item.id}
       ListHeaderComponent={header}
       contentContainerStyle={styles.list}
+      {...FAST_LIST}
       ListEmptyComponent={!loading ? <Text style={styles.muted}>No suggestions yet.</Text> : null}
       renderItem={({ item }) => (
         <Card style={styles.item}>
@@ -303,9 +301,13 @@ export function SuggestionsScreen() {
             {new Date(item.created_at).toLocaleString()}
             {item.user_id ? ` · user ${item.user_id.slice(0, 8)}…` : ""}
           </Text>
+          {isSuperAdmin ? (
+            <Button title="Delete" variant="destructive" size="sm" onPress={() => void removeSuggestion(item.id)} />
+          ) : null}
         </Card>
       )}
     />
+    </KeyboardSafeView>
   );
 }
 

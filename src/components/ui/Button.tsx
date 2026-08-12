@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { ActivityIndicator, Pressable, StyleProp, StyleSheet, Text, ViewStyle } from "react-native";
+import { ActivityIndicator, Platform, Pressable, StyleProp, StyleSheet, Text, ViewStyle } from "react-native";
 import { useAppTheme } from "../../contexts/ThemeContext";
 
 type ButtonVariant = "primary" | "outline" | "destructive" | "ghost";
@@ -48,6 +48,11 @@ export function Button({
       accessibilityRole="button"
       disabled={disabled || loading}
       onPress={onPress}
+      android_ripple={
+        Platform.OS === "android"
+          ? { color: "rgba(255,255,255,0.18)", foreground: true }
+          : undefined
+      }
       style={({ pressed }) => [
         styles.base,
         variantStyles,
@@ -77,9 +82,9 @@ const getStyles = (tokens: ReturnType<typeof useAppTheme>["tokens"]) =>
       backgroundColor: tokens.colors.primary,
       shadowColor: tokens.colors.primary,
       shadowOffset: { width: 0, height: 0 },
-      shadowOpacity: 0.45,
-      shadowRadius: 12,
-      elevation: 4,
+      shadowOpacity: 0.28,
+      shadowRadius: 8,
+      elevation: 2,
     },
     outline: {
       backgroundColor: "transparent",

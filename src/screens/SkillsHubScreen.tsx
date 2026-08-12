@@ -9,6 +9,7 @@ import {
   View,
 } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
+import { useAuth } from "../contexts/AuthContext";
 import { supabase } from "../integrations/supabase/client";
 import { tokens } from "../theme/tokens";
 import { Card, CardContent, CardDescription, CardHeader } from "../components/ui/Card";
@@ -207,18 +208,21 @@ function SkillCard({ skill }: { skill: Skill }) {
 }
 
 export function SkillsHubScreen() {
+  const { officeId } = useAuth();
   const [skills, setSkills] = useState<Skill[]>([]);
   const [loading, setLoading] = useState(true);
 
   const fetchSkills = useCallback(async () => {
     setLoading(true);
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from("skills")
         .select("*")
         .order("is_mandatory", { ascending: false, nullsFirst: false })
         .order("display_order", { ascending: true })
         .order("name", { ascending: true });
+      if (officeId) query = query.eq("office_id", officeId);
+      const { data, error } = await query;
 
       if (error) throw error;
 
@@ -232,7 +236,7 @@ export function SkillsHubScreen() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [officeId]);
 
   useFocusEffect(
     useCallback(() => {

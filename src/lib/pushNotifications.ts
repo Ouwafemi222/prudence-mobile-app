@@ -48,9 +48,11 @@ export async function configureNotificationHandler(): Promise<void> {
 
 async function ensureAndroidChannel(Notifications: ExpoNotifications) {
   if (Platform.OS !== "android") return;
-  await Notifications.setNotificationChannelAsync("default", {
-    name: "default",
-    importance: Notifications.AndroidImportance.DEFAULT,
+  await Notifications.setNotificationChannelAsync("prudence", {
+    name: "THE PRUDENCE",
+    importance: Notifications.AndroidImportance.HIGH,
+    vibrationPattern: [0, 180, 80, 180],
+    lightColor: "#5B52EB",
   });
 }
 
@@ -88,4 +90,25 @@ export async function registerForExpoPushTokenAsync(): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+export async function presentAppNotification(payload: {
+  title: string;
+  message: string;
+  link?: string | null;
+}): Promise<void> {
+  if (!canLoadExpoNotifications()) return;
+  await configureNotificationHandler();
+  const Notifications = await loadNotifications();
+  await ensureAndroidChannel(Notifications);
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title: "THE PRUDENCE",
+      subtitle: payload.title,
+      body: payload.message,
+      data: { link: payload.link ?? null },
+      sound: "default",
+    },
+    trigger: null,
+  });
 }

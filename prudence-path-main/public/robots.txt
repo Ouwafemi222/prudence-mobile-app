@@ -1,0 +1,36 @@
+User-agent: *
+Allow: /
+Allow: /features
+Allow: /how-it-works
+Allow: /about
+Allow: /faq
+Allow: /apply
+Allow: /pricing
+Allow: /demo
+Allow: /auth
+
+Disallow: /dashboard
+Disallow: /daily-activity
+Disallow: /daily-todo
+Disallow: /weekly-reports
+Disallow: /monthly-goals
+Disallow: /my-submissions
+Disallow: /submissions
+Disallow: /teams
+Disallow: /profile
+Disallow: /notifications
+Disallow: /settings
+Disallow: /sponsor-dashboard
+Disallow: /admin-dashboard
+Disallow: /admin-monthly-goals
+Disallow: /admin-skills
+Disallow: /trainer-group-weekly
+Disallow: /group-todos-reports
+Disallow: /skills-hub
+Disallow: /office-rules
+Disallow: /timetable
+Disallow: /pro-requirements
+Disallow: /suggestions
+Disallow: /waiting-approval
+
+Sitemap: https://prudence-path.online/sitemap.xml

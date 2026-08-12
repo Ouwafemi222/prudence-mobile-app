@@ -1,0 +1,31 @@
+# THE PRUDENCE
+
+> THE PRUDENCE is the Prudence Office Accountability & Training System — structured daily reporting, sponsor teams, trainer verification, and weekly/monthly performance rollups in one secure web app.
+
+## Product summary
+
+THE PRUDENCE helps offices enforce daily discipline with structured activity reports (reading, gigs, income, prospecting, skills), proof images, trainer approval workflows, sponsor downline visibility, and real-time weekly and monthly summaries. Built for teams in Nigeria (WAT / Africa/Lagos timezone) and available globally.
+
+## Key pages
+
+- Home: https://prudence-path.online/
+- Features: https://prudence-path.online/features
+- How it works: https://prudence-path.online/how-it-works
+- About: https://prudence-path.online/about
+- Start your office: https://prudence-path.online/apply
+- FAQ: https://prudence-path.online/faq
+- Demo: https://prudence-path.online/demo
+- Pricing: https://prudence-path.online/pricing
+
+## Common questions
+
+- What is THE PRUDENCE? An office accountability and training platform for daily reports, team oversight, and performance tracking.
+- Is it free? Yes — offices can apply to use THE PRUDENCE at no cost.
+- Who is it for? Office owners, trainers, sponsors, and members who need structured daily accountability.
+- Can I create my own office? Yes — apply at /apply. Existing members join via invite link from their office admin.
+- Where is it based? Designed for Nigeria (WAT timezone) with Sunday–Saturday weekly reporting.
+
+## Contact
+
+- Email: agboola378@gmail.com
+- Website: https://prudence-path.online

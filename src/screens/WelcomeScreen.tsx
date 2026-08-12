@@ -2,6 +2,7 @@ import { StyleSheet, Text, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAppTheme } from "../contexts/ThemeContext";
+import { Logo } from "../components/brand/Logo";
 import { Button } from "../components/ui/Button";
 import { GradientTitle } from "../components/ui/GradientTitle";
 
@@ -23,12 +24,10 @@ export function WelcomeScreen({ onGetStarted }: Props) {
       />
       <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
         <View style={styles.center}>
-          <View style={styles.orbLayer} pointerEvents="none">
-            <View style={styles.pseudoOrb} />
-          </View>
+          <Logo size={96} style={styles.logo} />
           <Text style={styles.caption}>Powerline Office · accountability & training</Text>
           <View style={styles.copy}>
-            <GradientTitle size="lg">Prudence Path</GradientTitle>
+            <GradientTitle size="lg">THE PRUDENCE</GradientTitle>
             <Text style={styles.subtitle}>Stay consistent, verified, and aligned with your team — from your phone.</Text>
           </View>
           <View style={styles.footer}>
@@ -54,25 +53,7 @@ const getStyles = (tokens: ReturnType<typeof useAppTheme>["tokens"]) =>
       alignItems: "center",
       gap: 16,
     },
-    orbLayer: {
-      ...StyleSheet.absoluteFillObject,
-      alignItems: "center",
-      justifyContent: "center",
-    },
-    pseudoOrb: {
-      width: 280,
-      height: 280,
-      borderRadius: 140,
-      borderWidth: 1,
-      borderColor: tokens.colors.borderGlow,
-      backgroundColor: "transparent",
-      shadowColor: tokens.colors.primary,
-      shadowOffset: { width: 0, height: 0 },
-      shadowOpacity: 0.22,
-      shadowRadius: 28,
-      elevation: 8,
-      opacity: 0.85,
-    },
+    logo: { marginBottom: 8 },
     caption: {
       fontSize: 12,
       letterSpacing: 1.2,

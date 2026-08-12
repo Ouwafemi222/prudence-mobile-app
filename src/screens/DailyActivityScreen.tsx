@@ -10,21 +10,26 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   UIManager,
   View,
 } from "react-native";
-import * as ImagePicker from "expo-image-picker";
 import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
 import { useDeferredReactNativeCalendar } from "../hooks/useDeferredReactNativeCalendar";
 import { useAuth } from "../contexts/AuthContext";
 import { supabase } from "../integrations/supabase/client";
 import { useAppTheme } from "../contexts/ThemeContext";
-import { formatISODateInNigeria, formatLongDateInNigeria } from "../lib/nigeriaTime";
-import { getLocalUriAsUploadBody } from "../lib/localFileForUpload";
+import { formatISODateInNigeria, formatLongDateInNigeria, getNigeriaWeekStartISO } from "../lib/nigeriaTime";
 import { formatSupabaseError } from "../lib/supabaseError";
 import { showAndroidToast } from "../lib/androidToast";
+import { WEEKLY_PAGES_TARGET } from "../lib/reportTargets";
+import { formatTagsToBoxes, hasDuplicateTagsInBoxes, normalizeTag, parseTagBoxes } from "../lib/activityTypes";
+import { fetchBlockedTags, tagReuseError } from "../lib/blockedTags";
+import { uploadActivityProofs } from "../lib/uploadActivityProof";
+import { pickProofFromGallery, snapLiveProofPhoto } from "../lib/pickProofImage";
+import { verificationFieldsOnResubmit } from "../lib/submissionRules";
+import { PolicyNoticeBanner } from "../components/notices/PolicyNoticeBanner";
 import { Card } from "../components/ui/Card";
+import { FocusAwareTextInput, KeyboardSafeScroll } from "../components/ui/KeyboardSafe";
 import { Input } from "../components/ui/Input";
 import { Textarea } from "../components/ui/Textarea";
 import { Button } from "../components/ui/Button";
@@ -32,19 +37,12 @@ import { Badge } from "../components/ui/Badge";
 
 type PaymentType = "fiverr" | "outside" | "";
 type Status = "draft" | "saved";
-type SectionKey = "reading" | "gigs" | "accounts" | "income" | "prospecting" | "trainer" | "other";
+type SectionKey = "reading" | "gigs" | "accounts" | "income" | "prospecting" | "skills" | "trainer" | "other";
+type ProofKind = "reading" | "gigs" | "accounts" | "skills" | "prospecting" | "other";
 
 const toInt = (v: string) => parseInt(v || "0", 10) || 0;
 const toFloat = (v: string) => parseFloat(v || "0") || 0;
 const cleanLinks = (links: string[]) => links.map((l) => l.trim()).filter(Boolean);
-
-const startOfWeekISO = (isoDate: string) => {
-  const d = new Date(`${isoDate}T00:00:00Z`);
-  const day = d.getUTCDay();
-  const diffToMonday = (day + 6) % 7;
-  d.setUTCDate(d.getUTCDate() - diffToMonday);
-  return d.toISOString().slice(0, 10);
-};
 
 const minutesUntilEndOfTodayNigeria = () => {
   const nowInNigeria = new Date(new Date().toLocaleString("en-US", { timeZone: "Africa/Lagos" }));
@@ -62,11 +60,13 @@ const EMPTY_FORM = {
   gigPlatform: "",
   gigService: "",
   gigLinks: [] as string[],
+  gigNotes: "",
   accountsCreated: "",
   accountPlatform: "",
   accountService: "",
   accountCountry: "",
   accountLinks: [] as string[],
+  accountNotes: "",
   paymentType: "" as PaymentType,
   outsidePaymentMethod: "",
   outsidePaymentMethodOther: "",
@@ -137,7 +137,7 @@ const WORK_TYPE_OPTIONS: SelectOption[] = [
 export function DailyActivityScreen() {
   const { tokens } = useAppTheme();
   const styles = getStyles(tokens);
-  const { user, userRole } = useAuth();
+  const { user, userRole, officeId } = useAuth();
   const tabBarHeight = useBottomTabBarHeight();
   const Calendar = useDeferredReactNativeCalendar();
   const today = useMemo(() => formatISODateInNigeria(), []);
@@ -161,20 +161,35 @@ export function DailyActivityScreen() {
     accounts: false,
     income: false,
     prospecting: false,
+    skills: false,
     trainer: false,
     other: false,
   });
-  const [existingReadingProofPaths, setExistingReadingProofPaths] = useState<string[]>([]);
-  const [readingProofUris, setReadingProofUris] = useState<string[]>([]);
-  const [existingOtherProofPaths, setExistingOtherProofPaths] = useState<string[]>([]);
-  const [otherProofUris, setOtherProofUris] = useState<string[]>([]);
+  const emptyProofs = (): Record<ProofKind, string[]> => ({
+    reading: [],
+    gigs: [],
+    accounts: [],
+    skills: [],
+    prospecting: [],
+    other: [],
+  });
+  const [savedProofs, setSavedProofs] = useState<Record<ProofKind, string[]>>(emptyProofs);
+  const [newProofUris, setNewProofUris] = useState<Record<ProofKind, string[]>>(emptyProofs);
+  const [tagBoxes, setTagBoxes] = useState<string[]>([""]);
+  const [usedTags, setUsedTags] = useState<string[]>([]);
+  const [savedTags, setSavedTags] = useState<string[]>([]);
+  const [existingMeta, setExistingMeta] = useState<{
+    id: string | null;
+    verified_at: string | null;
+    is_verified: boolean | null;
+  }>({ id: null, verified_at: null, is_verified: null });
 
   const isTrainer = userRole?.role === "trainer";
   const isFiverr = form.paymentType === "fiverr";
   const gross = toFloat(form.grossIncome);
   const fiverrFee = isFiverr ? gross * 0.2 : 0;
   const fiverrNet = isFiverr ? Math.max(gross - fiverrFee, 0) : 0;
-  const weeklyTargetPages = 5;
+  const weeklyTargetPages = WEEKLY_PAGES_TARGET;
   const weeklyProgress = Math.min((weeklyPages / weeklyTargetPages) * 100, 100);
 
   const showToast = (message: string) => {
@@ -192,8 +207,12 @@ export function DailyActivityScreen() {
     if (!user) return;
     try {
       if (selectedDate !== today) {
-        setIsLocked(false);
-        setLockMessage("You are editing a past date report.");
+        setIsLocked(true);
+        setLockMessage(
+          selectedDate < today
+            ? "Past dates are read-only. Submit or edit today’s report only."
+            : "Future dates are read-only. Submit today’s report only.",
+        );
         return;
       }
       const { data } = await supabase.rpc("is_today_submission_locked");
@@ -215,11 +234,26 @@ export function DailyActivityScreen() {
 
   const fetchWeeklyPages = async () => {
     if (!user) return;
-    const weekStart = startOfWeekISO(selectedDate);
+    const weekStart = getNigeriaWeekStartISO();
     const { data } = await supabase.from("daily_activities").select("pages_read").eq("user_id", user.id).gte("activity_date", weekStart);
     if (!data) return;
     const sum = data.reduce((acc, row) => acc + ((row.pages_read as number | null) ?? 0), 0);
     setWeeklyPages(sum);
+  };
+
+  const fetchUsedTags = async (currentActivityId?: string | null, currentActivityDate?: string | null) => {
+    if (!user) return;
+    try {
+      const blocked = await fetchBlockedTags({
+        userId: user.id,
+        officeId,
+        currentActivityId,
+        currentActivityDate: currentActivityDate ?? selectedDate,
+      });
+      setUsedTags(blocked);
+    } catch {
+      setUsedTags([]);
+    }
   };
 
   const fetchMorningPlan = async () => {
@@ -240,15 +274,21 @@ export function DailyActivityScreen() {
       const { data, error: rowErr } = await supabase.from("daily_activities").select("*").eq("user_id", user.id).eq("activity_date", selectedDate).maybeSingle();
       if (rowErr) throw rowErr;
 
-      await Promise.all([checkLock(), fetchWeeklyPages(), fetchMorningPlan()]);
+      await Promise.all([
+        checkLock(),
+        fetchWeeklyPages(),
+        fetchMorningPlan(),
+        fetchUsedTags(data?.id as string | undefined, selectedDate),
+      ]);
 
       if (!data) {
         setForm(EMPTY_FORM);
         setStatus("draft");
-        setExistingReadingProofPaths([]);
-        setReadingProofUris([]);
-        setExistingOtherProofPaths([]);
-        setOtherProofUris([]);
+        setSavedProofs(emptyProofs());
+        setNewProofUris(emptyProofs());
+        setTagBoxes([""]);
+        setSavedTags([]);
+        setExistingMeta({ id: null, verified_at: null, is_verified: null });
         return;
       }
 
@@ -259,11 +299,13 @@ export function DailyActivityScreen() {
         gigPlatform: data.gig_platform ?? "",
         gigService: data.gig_service ?? "",
         gigLinks: data.gig_links ?? (data.gig_link ? [data.gig_link] : []),
+        gigNotes: data.gig_notes ?? "",
         accountsCreated: String(data.accounts_created ?? ""),
         accountPlatform: data.account_platform ?? "",
         accountService: data.account_service ?? "",
         accountCountry: data.account_country ?? "",
         accountLinks: data.account_links ?? [],
+        accountNotes: data.account_notes ?? "",
         paymentType: (data.payment_type ?? (data.income_platform === "fiverr" ? "fiverr" : "")) as PaymentType,
         outsidePaymentMethod: data.outside_payment_method ?? "",
         outsidePaymentMethodOther: data.outside_payment_method_other ?? "",
@@ -288,19 +330,30 @@ export function DailyActivityScreen() {
         otherActivities: data.other_activities ?? "",
       });
       const readingPaths = ((data.reading_proof_images as string[] | null) ?? []).filter(Boolean);
-      if (readingPaths.length === 0 && data.reading_proof_image) {
-        setExistingReadingProofPaths([data.reading_proof_image as string]);
-      } else {
-        setExistingReadingProofPaths(readingPaths);
-      }
-      setReadingProofUris([]);
+      if (readingPaths.length === 0 && data.reading_proof_image) readingPaths.push(data.reading_proof_image as string);
+      const skillPaths = ((data.skill_proof_images as string[] | null) ?? []).filter(Boolean);
+      if (skillPaths.length === 0 && data.skill_proof_image) skillPaths.push(data.skill_proof_image as string);
       const otherPaths = ((data.other_activities_proof_images as string[] | null) ?? []).filter(Boolean);
       if (otherPaths.length === 0 && data.other_activities_proof_image) {
-        setExistingOtherProofPaths([data.other_activities_proof_image as string]);
-      } else {
-        setExistingOtherProofPaths(otherPaths);
+        otherPaths.push(data.other_activities_proof_image as string);
       }
-      setOtherProofUris([]);
+      setSavedProofs({
+        reading: readingPaths,
+        gigs: ((data.gig_proof_images as string[] | null) ?? []).filter(Boolean),
+        accounts: ((data.account_proof_images as string[] | null) ?? []).filter(Boolean),
+        skills: skillPaths,
+        prospecting: ((data.prospecting_proof_images as string[] | null) ?? []).filter(Boolean),
+        other: otherPaths,
+      });
+      setNewProofUris(emptyProofs());
+      const loadedTags = parseTagBoxes((data.submission_tags as string[] | null) ?? []);
+      setTagBoxes(formatTagsToBoxes(loadedTags));
+      setSavedTags(loadedTags);
+      setExistingMeta({
+        id: (data.id as string | null) ?? null,
+        verified_at: (data.verified_at as string | null) ?? null,
+        is_verified: (data.is_verified as boolean | null) ?? null,
+      });
       setStatus("saved");
     } catch (e: any) {
       setError(e?.message || "Failed to load daily activity.");
@@ -319,29 +372,49 @@ export function DailyActivityScreen() {
 
   const submit = async () => {
     if (!user || isLocked) return;
+    if (hasDuplicateTagsInBoxes(tagBoxes)) {
+      setError("Remove duplicate tags — matching is not case-sensitive (Agno and agno count as the same).");
+      return;
+    }
+    const tags = parseTagBoxes(tagBoxes);
+    const allowedOnThisReport = savedTags.map((t) => normalizeTag(t));
+    const reused = tags.filter((tag) => tagReuseError(tag, usedTags, allowedOnThisReport));
+    if (reused.length > 0) {
+      setError(`These tags were already used on another day: ${reused.join(", ")}. Each tag can only be used once.`);
+      return;
+    }
     setSaving(true);
     setError(null);
     const wasSaved = status === "saved";
     try {
-      const uploadedReadingPaths = await uploadReadingProofImages();
-      const mergedReadingPaths = [...existingReadingProofPaths, ...uploadedReadingPaths];
-      const uploadedOtherPaths = await uploadOtherProofImages();
-      const mergedOtherPaths = [...existingOtherProofPaths, ...uploadedOtherPaths];
+      const merged = {
+        reading: [...savedProofs.reading, ...(await uploadProofs("reading"))],
+        gigs: [...savedProofs.gigs, ...(await uploadProofs("gigs"))],
+        accounts: [...savedProofs.accounts, ...(await uploadProofs("accounts"))],
+        skills: [...savedProofs.skills, ...(await uploadProofs("skills"))],
+        prospecting: [...savedProofs.prospecting, ...(await uploadProofs("prospecting"))],
+        other: [...savedProofs.other, ...(await uploadProofs("other"))],
+      };
       const payload = {
         user_id: user.id,
+        office_id: officeId,
         activity_date: selectedDate,
         pages_read: toInt(form.pagesRead),
         reading_notes: form.readingNotes || null,
-        reading_proof_images: mergedReadingPaths.length > 0 ? mergedReadingPaths : null,
+        reading_proof_images: merged.reading.length > 0 ? merged.reading : null,
         gigs_created: toInt(form.gigsCreated),
         gig_platform: form.gigPlatform || null,
         gig_service: form.gigService || null,
+        gig_notes: form.gigNotes || null,
         gig_links: cleanLinks(form.gigLinks).length > 0 ? cleanLinks(form.gigLinks) : null,
+        gig_proof_images: merged.gigs.length > 0 ? merged.gigs : null,
         accounts_created: toInt(form.accountsCreated),
         account_platform: form.accountPlatform || null,
         account_service: form.accountService || null,
         account_country: form.accountCountry || null,
+        account_notes: form.accountNotes || null,
         account_links: cleanLinks(form.accountLinks).length > 0 ? cleanLinks(form.accountLinks) : null,
+        account_proof_images: merged.accounts.length > 0 ? merged.accounts : null,
         gross_income: toFloat(form.grossIncome),
         net_income: isFiverr ? fiverrNet : toFloat(form.netIncome || form.grossIncome),
         income_platform: isFiverr ? "fiverr" : "outside",
@@ -360,6 +433,8 @@ export function DailyActivityScreen() {
         expected_conversions: toInt(form.expectedConversions),
         skill_learned: form.skillLearned || null,
         skill_description: form.skillDescription || null,
+        skill_proof_images: merged.skills.length > 0 ? merged.skills : null,
+        prospecting_proof_images: merged.prospecting.length > 0 ? merged.prospecting : null,
         skill_taught: isTrainer ? form.skillTaught || null : null,
         is_theory: isTrainer ? form.isTheory : false,
         is_practical: isTrainer ? form.isPractical : false,
@@ -367,8 +442,13 @@ export function DailyActivityScreen() {
         training_duration_minutes: isTrainer ? toInt(form.trainingDuration) : 0,
         submissions_reviewed: isTrainer ? toInt(form.submissionsReviewed) : 0,
         other_activities: form.otherActivities.trim() || "",
-        other_activities_proof_images: mergedOtherPaths.length > 0 ? mergedOtherPaths : null,
+        other_activities_proof_images: merged.other.length > 0 ? merged.other : null,
+        submission_tags: tags.length > 0 ? tags : null,
         submitted_at: new Date().toISOString(),
+        ...verificationFieldsOnResubmit({
+          verified_at: existingMeta.verified_at,
+          is_verified: existingMeta.is_verified,
+        }),
       };
 
       const { error: upsertErr } = await supabase.from("daily_activities").upsert(payload, { onConflict: "user_id,activity_date" });
@@ -378,7 +458,14 @@ export function DailyActivityScreen() {
       await fetchReport();
       showToast(wasSaved ? "Daily report updated" : "Daily report saved");
     } catch (e: unknown) {
-      setError(formatSupabaseError(e));
+      const raw = formatSupabaseError(e);
+      if (raw.includes("tag_already_used")) {
+        setError("One or more tags were already used on another day. Each tag can only be used once.");
+      } else if (raw.includes("tag_limit_exceeded")) {
+        setError("Maximum 10 tags per daily report.");
+      } else {
+        setError(raw);
+      }
     } finally {
       setSaving(false);
     }
@@ -388,79 +475,69 @@ export function DailyActivityScreen() {
   const removeLink = (key: "gigLinks" | "accountLinks", index: number) => setForm((p) => ({ ...p, [key]: p[key].filter((_, i) => i !== index) }));
   const labelFor = (options: SelectOption[], value: string) => options.find((o) => o.value === value)?.label ?? "";
   const toggleSection = (key: SectionKey) => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    if (Platform.OS === "ios") {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    }
     setExpanded((prev) => ({ ...prev, [key]: !prev[key] }));
   };
   const getPublicImageUrl = (path: string) => supabase.storage.from("avatars").getPublicUrl(path).data.publicUrl;
-  const pickReadingImages = async () => {
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) {
-      Alert.alert("Permission needed", "Please allow access to your photos to upload reading proof images.");
-      return;
-    }
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      allowsMultipleSelection: true,
-      quality: 0.8,
-      selectionLimit: 6,
+  const pickProofs = async (kind: ProofKind) => {
+    const uris = await pickProofFromGallery({ multiple: true, limit: 6 });
+    if (uris.length === 0) return;
+    setNewProofUris((prev) => ({ ...prev, [kind]: [...prev[kind], ...uris] }));
+  };
+  const snapProof = async (kind: ProofKind) => {
+    const uri = await snapLiveProofPhoto();
+    if (!uri) return;
+    setNewProofUris((prev) => ({ ...prev, [kind]: [...prev[kind], uri] }));
+  };
+  const removeNewProof = (kind: ProofKind, index: number) =>
+    setNewProofUris((prev) => ({ ...prev, [kind]: prev[kind].filter((_, i) => i !== index) }));
+  const removeSavedProof = (kind: ProofKind, path: string) =>
+    setSavedProofs((prev) => ({ ...prev, [kind]: prev[kind].filter((item) => item !== path) }));
+  const uploadProofs = async (kind: ProofKind) => {
+    if (!user) return [];
+    return uploadActivityProofs({
+      uris: newProofUris[kind],
+      userId: user.id,
+      officeId,
+      proofType: kind,
+      activityDate: selectedDate,
+      activityId: existingMeta.id,
     });
-    if (result.canceled) return;
-    const newUris = result.assets.map((asset) => asset.uri).filter(Boolean);
-    setReadingProofUris((prev) => [...prev, ...newUris]);
   };
-  const removeReadingProofUri = (index: number) => setReadingProofUris((prev) => prev.filter((_, i) => i !== index));
-  const uploadReadingProofImages = async () => {
-    if (!user || readingProofUris.length === 0) return [];
-    const uploadedPaths: string[] = [];
-    for (const uri of readingProofUris) {
-      const { body, contentType } = await getLocalUriAsUploadBody(uri);
-      const extMatch = uri.match(/\.(\w+)(\?|$)/);
-      const ext = extMatch?.[1] ?? "jpg";
-      const filePath = `${user.id}/reading_${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
-      const { error: uploadError } = await supabase.storage.from("avatars").upload(filePath, body, {
-        contentType,
-        upsert: false,
-      });
-      if (uploadError) throw uploadError;
-      uploadedPaths.push(filePath);
-    }
-    return uploadedPaths;
-  };
-  const pickOtherImages = async () => {
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) {
-      Alert.alert("Permission needed", "Please allow access to your photos to upload other activity proof images.");
-      return;
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      allowsMultipleSelection: true,
-      quality: 0.8,
-      selectionLimit: 6,
-    });
-    if (result.canceled) return;
-    const newUris = result.assets.map((asset) => asset.uri).filter(Boolean);
-    setOtherProofUris((prev) => [...prev, ...newUris]);
-  };
-  const removeOtherProofUri = (index: number) => setOtherProofUris((prev) => prev.filter((_, i) => i !== index));
-  const uploadOtherProofImages = async () => {
-    if (!user || otherProofUris.length === 0) return [];
-    const uploadedPaths: string[] = [];
-    for (const uri of otherProofUris) {
-      const { body, contentType } = await getLocalUriAsUploadBody(uri);
-      const extMatch = uri.match(/\.(\w+)(\?|$)/);
-      const ext = extMatch?.[1] ?? "jpg";
-      const filePath = `${user.id}/other_${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
-      const { error: uploadError } = await supabase.storage.from("avatars").upload(filePath, body, {
-        contentType,
-        upsert: false,
-      });
-      if (uploadError) throw uploadError;
-      uploadedPaths.push(filePath);
-    }
-    return uploadedPaths;
-  };
+  const renderProofs = (kind: ProofKind, label: string, opts?: { liveCamera?: boolean }) => (
+    <>
+      <View style={styles.topRow}>
+        <Text style={styles.label}>{label}</Text>
+        {!isLocked ? (
+          <View style={styles.proofActions}>
+            {opts?.liveCamera ? (
+              <Button title="Snap live" size="sm" onPress={() => void snapProof(kind)} />
+            ) : null}
+            <Button title={opts?.liveCamera ? "Gallery" : "+ Upload"} variant="outline" size="sm" onPress={() => void pickProofs(kind)} />
+          </View>
+        ) : null}
+      </View>
+      {opts?.liveCamera && !isLocked ? (
+        <Text style={styles.mutedText}>Snap a live photo of the book you read, or pick from your gallery.</Text>
+      ) : null}
+      {savedProofs[kind].map((path) => (
+        <View key={path} style={styles.proofRow}>
+          <Image source={{ uri: getPublicImageUrl(path) }} style={styles.proofImage} resizeMode="cover" />
+          {!isLocked ? (
+            <Button title="Remove saved" variant="destructive" size="sm" onPress={() => removeSavedProof(kind, path)} />
+          ) : null}
+        </View>
+      ))}
+      {newProofUris[kind].map((uri, index) => (
+        <View key={`${uri}-${index}`} style={styles.proofRow}>
+          <Image source={{ uri }} style={styles.proofImage} resizeMode="cover" />
+          <Button title="Remove" variant="destructive" size="sm" onPress={() => removeNewProof(kind, index)} />
+        </View>
+      ))}
+    </>
+  );
   const openPicker = (title: string, options: SelectOption[], onSelect: (value: string) => void) => {
     setPickerTitle(title);
     setPickerOptions(options);
@@ -492,22 +569,29 @@ export function DailyActivityScreen() {
   }
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={[styles.container, { paddingBottom: tabBarHeight + 56 }]}>
+    <KeyboardSafeScroll style={styles.screen} contentContainerStyle={[styles.container, { paddingBottom: tabBarHeight + 56 }]}>
       <View style={styles.topRow}>
         <Text style={styles.title}>Daily Activity</Text>
         <Badge variant={isLocked ? "destructive" : status === "saved" ? "success" : "default"}>
           {isLocked ? "Locked" : status === "saved" ? "Saved" : "Draft"}
         </Badge>
       </View>
-      <Text style={styles.subtitle}>Complete your report and submit/update for this date.</Text>
+      <Text style={styles.subtitle}>Complete today’s report before 11:59 PM WAT. Past dates are read-only.</Text>
       <Text style={styles.mutedText}>{lockMessage}</Text>
+      <PolicyNoticeBanner noticeId="tags_lifetime_v2" title="Tags are lifetime unique">
+        Add up to 10 tags, one per box. Each tag can be used only once ever in this office (case-insensitive).
+      </PolicyNoticeBanner>
 
       <Card style={styles.card}>
         <Text style={styles.cardTitle}>Pick a date</Text>
         <View style={styles.calendarWrap}>
           {Calendar ? (
             <Calendar
-              onDayPress={(d: { dateString: string }) => setSelectedDate(d.dateString)}
+              maxDate={today}
+              onDayPress={(d: { dateString: string }) => {
+                if (d.dateString > today) return;
+                setSelectedDate(d.dateString);
+              }}
               markedDates={{ [selectedDate]: { selected: true, selectedColor: tokens.colors.primary } }}
               theme={{
                 calendarBackground: tokens.colors.surface,
@@ -529,7 +613,7 @@ export function DailyActivityScreen() {
           )}
         </View>
         <View style={styles.dateRow}>
-          <TextInput value={selectedDate} onChangeText={setSelectedDate} style={[styles.textInput, { flex: 1 }]} placeholder="YYYY-MM-DD" keyboardType="numbers-and-punctuation" />
+          <FocusAwareTextInput value={selectedDate} onChangeText={setSelectedDate} style={[styles.textInput, { flex: 1 }]} placeholder="YYYY-MM-DD" keyboardType="numbers-and-punctuation" />
           <View style={{ width: 8 }} />
           <Button title="Today" variant="outline" onPress={() => setSelectedDate(today)} size="sm" />
         </View>
@@ -563,24 +647,12 @@ export function DailyActivityScreen() {
         {expanded.reading ? (
           <>
             <Text style={styles.label}>Pages Read</Text>
-            <TextInput value={form.pagesRead} onChangeText={(v) => setForm((p) => ({ ...p, pagesRead: v }))} style={styles.textInput} keyboardType="numbers-and-punctuation" />
+            <FocusAwareTextInput value={form.pagesRead} onChangeText={(v) => setForm((p) => ({ ...p, pagesRead: v }))} style={styles.textInput} keyboardType="numbers-and-punctuation" />
             <Text style={styles.label}>Reading Notes (max 200)</Text>
             <Textarea value={form.readingNotes} onChangeText={(v) => setForm((p) => ({ ...p, readingNotes: v.slice(0, 200) }))} placeholder="What did you learn today?" />
             <Text style={styles.mutedText}>{form.readingNotes.length}/200</Text>
 
-            <View style={styles.topRow}>
-              <Text style={styles.label}>Book Proof Images</Text>
-              <Button title="+ Upload Book Image" variant="outline" size="sm" onPress={pickReadingImages} />
-            </View>
-            {existingReadingProofPaths.map((path) => (
-              <Image key={path} source={{ uri: getPublicImageUrl(path) }} style={styles.proofImage} resizeMode="cover" />
-            ))}
-            {readingProofUris.map((uri, index) => (
-              <View key={`${uri}-${index}`} style={styles.proofRow}>
-                <Image source={{ uri }} style={styles.proofImage} resizeMode="cover" />
-                <Button title="Remove" variant="destructive" size="sm" onPress={() => removeReadingProofUri(index)} />
-              </View>
-            ))}
+            {renderProofs("reading", "Book Proof Images", { liveCamera: true })}
           </>
         ) : null}
       </Card>
@@ -593,7 +665,7 @@ export function DailyActivityScreen() {
         {expanded.gigs ? (
           <>
             <Text style={styles.label}>Number of Gigs</Text>
-            <TextInput value={form.gigsCreated} onChangeText={(v) => setForm((p) => ({ ...p, gigsCreated: v }))} style={styles.textInput} keyboardType="numbers-and-punctuation" />
+            <FocusAwareTextInput value={form.gigsCreated} onChangeText={(v) => setForm((p) => ({ ...p, gigsCreated: v }))} style={styles.textInput} keyboardType="numbers-and-punctuation" />
             <View style={styles.dual}>
               <View style={styles.formHalf}>
                 <Text style={styles.label}>Platform</Text>
@@ -618,6 +690,9 @@ export function DailyActivityScreen() {
                 <Button title="Remove" variant="destructive" size="sm" onPress={() => removeLink("gigLinks", index)} />
               </View>
             ))}
+            <Text style={styles.label}>Gig notes</Text>
+            <Textarea value={form.gigNotes} onChangeText={(v) => setForm((p) => ({ ...p, gigNotes: v }))} placeholder="Notes about gigs created today" style={{ minHeight: 80 }} />
+            {renderProofs("gigs", "Gig proof images")}
           </>
         ) : null}
       </Card>
@@ -630,7 +705,7 @@ export function DailyActivityScreen() {
         {expanded.accounts ? (
           <>
             <Text style={styles.label}>Accounts Created</Text>
-            <TextInput value={form.accountsCreated} onChangeText={(v) => setForm((p) => ({ ...p, accountsCreated: v }))} style={styles.textInput} keyboardType="numbers-and-punctuation" />
+            <FocusAwareTextInput value={form.accountsCreated} onChangeText={(v) => setForm((p) => ({ ...p, accountsCreated: v }))} style={styles.textInput} keyboardType="numbers-and-punctuation" />
             <View style={styles.dual}>
               <View style={styles.formHalf}>
                 <Text style={styles.label}>Platform</Text>
@@ -645,6 +720,19 @@ export function DailyActivityScreen() {
             </View>
             <Text style={styles.label}>Country</Text>
             <Input value={form.accountCountry} onChangeText={(v) => setForm((p) => ({ ...p, accountCountry: v }))} placeholder="USA" />
+            <View style={styles.topRow}>
+              <Text style={styles.label}>Account links</Text>
+              <Button title="+ Add Link" variant="outline" size="sm" onPress={() => addLink("accountLinks")} />
+            </View>
+            {form.accountLinks.map((link, index) => (
+              <View key={`a-${index}`} style={styles.linkRow}>
+                <Input value={link} onChangeText={(value) => setForm((p) => ({ ...p, accountLinks: p.accountLinks.map((x, i) => (i === index ? value : x)) }))} placeholder="https://..." style={{ flex: 1 }} />
+                <Button title="Remove" variant="destructive" size="sm" onPress={() => removeLink("accountLinks", index)} />
+              </View>
+            ))}
+            <Text style={styles.label}>Account notes</Text>
+            <Textarea value={form.accountNotes} onChangeText={(v) => setForm((p) => ({ ...p, accountNotes: v }))} placeholder="Notes about accounts created today" style={{ minHeight: 80 }} />
+            {renderProofs("accounts", "Account proof images")}
           </>
         ) : null}
       </Card>
@@ -670,13 +758,30 @@ export function DailyActivityScreen() {
             <View style={styles.dual}>
               <View style={styles.formHalf}>
                 <Text style={styles.label}>Gross Income ($)</Text>
-                <TextInput value={form.grossIncome} onChangeText={(v) => setForm((p) => ({ ...p, grossIncome: v }))} style={styles.textInput} keyboardType="numbers-and-punctuation" />
+                <FocusAwareTextInput value={form.grossIncome} onChangeText={(v) => setForm((p) => ({ ...p, grossIncome: v }))} style={styles.textInput} keyboardType="numbers-and-punctuation" />
               </View>
               <View style={styles.formHalf}>
                 <Text style={styles.label}>Net Income ($)</Text>
-                <TextInput value={isFiverr ? fiverrNet.toFixed(2) : form.netIncome} onChangeText={(v) => setForm((p) => ({ ...p, netIncome: v }))} style={[styles.textInput, isFiverr ? styles.disabledInput : undefined]} keyboardType="numbers-and-punctuation" editable={!isFiverr} />
+                <FocusAwareTextInput value={isFiverr ? fiverrNet.toFixed(2) : form.netIncome} onChangeText={(v) => setForm((p) => ({ ...p, netIncome: v }))} style={[styles.textInput, isFiverr ? styles.disabledInput : undefined]} keyboardType="numbers-and-punctuation" editable={!isFiverr} />
               </View>
             </View>
+            {isFiverr ? (
+              <>
+                <Text style={styles.mutedText}>Fiverr fee (20%): ${fiverrFee.toFixed(2)}</Text>
+                <View style={styles.dual}>
+                  <View style={styles.formHalf}>
+                    <Text style={styles.label}>Cancelled orders</Text>
+                    <FocusAwareTextInput value={form.cancelledOrdersCount} onChangeText={(v) => setForm((p) => ({ ...p, cancelledOrdersCount: v }))} style={styles.textInput} keyboardType="numbers-and-punctuation" />
+                  </View>
+                  <View style={styles.formHalf}>
+                    <Text style={styles.label}>Amount received ($)</Text>
+                    <FocusAwareTextInput value={form.cancelledOrderAmountReceived} onChangeText={(v) => setForm((p) => ({ ...p, cancelledOrderAmountReceived: v }))} style={styles.textInput} keyboardType="numbers-and-punctuation" />
+                  </View>
+                </View>
+                <Text style={styles.label}>Delivery days</Text>
+                <FocusAwareTextInput value={form.deliveryDays} onChangeText={(v) => setForm((p) => ({ ...p, deliveryDays: v }))} style={styles.textInput} keyboardType="numbers-and-punctuation" />
+              </>
+            ) : null}
             {form.paymentType === "outside" ? (
               <>
                 <Text style={styles.label}>Outside Payment Method</Text>
@@ -713,14 +818,14 @@ export function DailyActivityScreen() {
               </View>
             </View>
             <Text style={styles.label}>Daily Contacts</Text>
-            <TextInput value={form.dailyContacts} onChangeText={(v) => setForm((p) => ({ ...p, dailyContacts: v }))} style={styles.textInput} keyboardType="numbers-and-punctuation" />
+            <FocusAwareTextInput value={form.dailyContacts} onChangeText={(v) => setForm((p) => ({ ...p, dailyContacts: v }))} style={styles.textInput} keyboardType="numbers-and-punctuation" />
           </>
         ) : null}
       </Card>
 
       <Card style={styles.card}>
         <Pressable style={styles.sectionHeader} onPress={() => toggleSection("prospecting")}>
-          <Text style={styles.cardTitle}>Prospecting & Skills</Text>
+          <Text style={styles.cardTitle}>Prospecting</Text>
           <Text style={styles.sectionChevron}>{expanded.prospecting ? "▲" : "▼"}</Text>
         </Pressable>
         {expanded.prospecting ? (
@@ -728,18 +833,83 @@ export function DailyActivityScreen() {
             <View style={styles.dual}>
               <View style={styles.formHalf}>
                 <Text style={styles.label}>Follow-ups</Text>
-                <TextInput value={form.followUps} onChangeText={(v) => setForm((p) => ({ ...p, followUps: v }))} style={styles.textInput} keyboardType="numbers-and-punctuation" />
+                <FocusAwareTextInput value={form.followUps} onChangeText={(v) => setForm((p) => ({ ...p, followUps: v }))} style={styles.textInput} keyboardType="numbers-and-punctuation" />
               </View>
               <View style={styles.formHalf}>
                 <Text style={styles.label}>Expected Conversions</Text>
-                <TextInput value={form.expectedConversions} onChangeText={(v) => setForm((p) => ({ ...p, expectedConversions: v }))} style={styles.textInput} keyboardType="numbers-and-punctuation" />
+                <FocusAwareTextInput value={form.expectedConversions} onChangeText={(v) => setForm((p) => ({ ...p, expectedConversions: v }))} style={styles.textInput} keyboardType="numbers-and-punctuation" />
               </View>
             </View>
+            {renderProofs("prospecting", "Prospecting proof images")}
+          </>
+        ) : null}
+      </Card>
+
+      <Card style={styles.card}>
+        <Pressable style={styles.sectionHeader} onPress={() => toggleSection("skills")}>
+          <Text style={styles.cardTitle}>Skill Acquisition</Text>
+          <Text style={styles.sectionChevron}>{expanded.skills ? "▲" : "▼"}</Text>
+        </Pressable>
+        {expanded.skills ? (
+          <>
             <Text style={styles.label}>Skill Learned</Text>
             <Input value={form.skillLearned} onChangeText={(v) => setForm((p) => ({ ...p, skillLearned: v }))} placeholder="Advanced Excel formulas" />
             <Text style={styles.label}>Skill Description</Text>
-            <Textarea value={form.skillDescription} onChangeText={(v) => setForm((p) => ({ ...p, skillDescription: v }))} placeholder="Describe what you learned..." />
+            <Textarea value={form.skillDescription} onChangeText={(v) => setForm((p) => ({ ...p, skillDescription: v }))} placeholder="Describe what you learned..." style={{ minHeight: 80 }} />
+            {renderProofs("skills", "Skill proof images")}
           </>
+        ) : null}
+      </Card>
+
+      <Card style={styles.card}>
+        <Text style={styles.cardTitle}>Daily Tags</Text>
+        <Text style={styles.mutedText}>
+          One tag per box. Max 10. You can edit today’s tags freely. Tags from other days stay blocked.
+        </Text>
+        {tagBoxes.map((box, index) => {
+          const normalized = normalizeTag(box);
+          const dupHere = Boolean(
+            normalized && tagBoxes.some((other, i) => i !== index && normalizeTag(other) === normalized),
+          );
+          const usedBefore = Boolean(
+            normalized && usedTags.includes(normalized) && !savedTags.map((t) => normalizeTag(t)).includes(normalized),
+          );
+          const invalid = dupHere || usedBefore;
+          return (
+            <View key={`tag-${index}`} style={{ gap: 4 }}>
+              <View style={styles.dateRow}>
+                <FocusAwareTextInput
+                  value={box}
+                  onChangeText={(value) =>
+                    setTagBoxes((prev) => prev.map((item, i) => (i === index ? value : item)))
+                  }
+                  style={[styles.textInput, { flex: 1 }, invalid ? styles.tagInvalid : null]}
+                  placeholder={`Tag ${index + 1}`}
+                  editable={!isLocked}
+                  autoCapitalize="none"
+                />
+                {tagBoxes.length > 1 ? (
+                  <Button
+                    title="Remove"
+                    variant="ghost"
+                    size="sm"
+                    onPress={() => setTagBoxes((prev) => prev.filter((_, i) => i !== index))}
+                  />
+                ) : null}
+              </View>
+              {dupHere ? <Text style={styles.error}>This tag is duplicated in today's boxes.</Text> : null}
+              {usedBefore ? <Text style={styles.error}>Already used before — pick a new tag.</Text> : null}
+            </View>
+          );
+        })}
+        {tagBoxes.length < 10 && !isLocked ? (
+          <Button title="Add tag" variant="outline" size="sm" onPress={() => setTagBoxes((prev) => [...prev, ""])} />
+        ) : null}
+        {usedTags.length > 0 ? (
+          <Text style={styles.mutedText}>
+            Used on other days: {usedTags.slice(0, 20).join(", ")}
+            {usedTags.length > 20 ? "…" : ""}
+          </Text>
         ) : null}
       </Card>
 
@@ -753,6 +923,22 @@ export function DailyActivityScreen() {
             <>
               <Text style={styles.label}>Skill Taught</Text>
               <Input value={form.skillTaught} onChangeText={(v) => setForm((p) => ({ ...p, skillTaught: v }))} placeholder="Prospecting techniques" />
+              <View style={styles.dual}>
+                <Button title={form.isTheory ? "Theory ✓" : "Theory"} variant={form.isTheory ? "primary" : "outline"} size="sm" onPress={() => setForm((p) => ({ ...p, isTheory: !p.isTheory }))} />
+                <Button title={form.isPractical ? "Practical ✓" : "Practical"} variant={form.isPractical ? "primary" : "outline"} size="sm" onPress={() => setForm((p) => ({ ...p, isPractical: !p.isPractical }))} />
+              </View>
+              <View style={styles.dual}>
+                <View style={styles.formHalf}>
+                  <Text style={styles.label}>Students trained</Text>
+                  <FocusAwareTextInput value={form.studentsTrained} onChangeText={(v) => setForm((p) => ({ ...p, studentsTrained: v }))} style={styles.textInput} keyboardType="numbers-and-punctuation" />
+                </View>
+                <View style={styles.formHalf}>
+                  <Text style={styles.label}>Duration (min)</Text>
+                  <FocusAwareTextInput value={form.trainingDuration} onChangeText={(v) => setForm((p) => ({ ...p, trainingDuration: v }))} style={styles.textInput} keyboardType="numbers-and-punctuation" />
+                </View>
+              </View>
+              <Text style={styles.label}>Submissions reviewed</Text>
+              <FocusAwareTextInput value={form.submissionsReviewed} onChangeText={(v) => setForm((p) => ({ ...p, submissionsReviewed: v }))} style={styles.textInput} keyboardType="numbers-and-punctuation" />
             </>
           ) : null}
         </Card>
@@ -766,19 +952,7 @@ export function DailyActivityScreen() {
         {expanded.other ? (
           <>
             <Textarea value={form.otherActivities} onChangeText={(v) => setForm((p) => ({ ...p, otherActivities: v }))} placeholder="Write other activities done today..." />
-            <View style={styles.topRow}>
-              <Text style={styles.label}>Other Activity Proof Images</Text>
-              <Button title="+ Upload Image" variant="outline" size="sm" onPress={pickOtherImages} />
-            </View>
-            {existingOtherProofPaths.map((path) => (
-              <Image key={path} source={{ uri: getPublicImageUrl(path) }} style={styles.proofImage} resizeMode="cover" />
-            ))}
-            {otherProofUris.map((uri, index) => (
-              <View key={`${uri}-${index}`} style={styles.proofRow}>
-                <Image source={{ uri }} style={styles.proofImage} resizeMode="cover" />
-                <Button title="Remove" variant="destructive" size="sm" onPress={() => removeOtherProofUri(index)} />
-              </View>
-            ))}
+            {renderProofs("other", "Other Activity Proof Images")}
           </>
         ) : null}
       </Card>
@@ -811,7 +985,7 @@ export function DailyActivityScreen() {
           </View>
         </View>
       </Modal>
-    </ScrollView>
+    </KeyboardSafeScroll>
   );
 }
 
@@ -892,6 +1066,7 @@ const getStyles = (tokens: ReturnType<typeof useAppTheme>["tokens"]) =>
   dual: { flexDirection: "row", gap: 10 },
   formHalf: { flex: 1, gap: 6 },
   linkRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  proofActions: { flexDirection: "row", gap: 8, alignItems: "center" },
   proofRow: { gap: 8 },
   proofImage: {
     width: "100%",
@@ -946,6 +1121,7 @@ const getStyles = (tokens: ReturnType<typeof useAppTheme>["tokens"]) =>
     backgroundColor: tokens.colors.primary,
     borderRadius: 999,
   },
+  tagInvalid: { borderColor: tokens.colors.destructive },
   error: { color: tokens.colors.destructive, fontSize: 13 },
   lockedText: { color: tokens.colors.warning, fontSize: 13 },
   });
